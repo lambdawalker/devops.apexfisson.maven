@@ -26,10 +26,15 @@ Retain reduces accidental volume deletion; it does **not** provide backups.
 1. **[Setup](docs/setup.md)**: cluster, administrator, domain and TLS.
 2. **[Publishing and consuming](docs/publishing.md)**: scoped tokens and Gradle.
 3. **[Operations](docs/operations.md)**: backups, restore, upgrades and diagnostics.
+4. **[GitHub deployment](docs/github-deployment.md)**: environment settings and the
+   manual **Deploy Reposilite** workflow.
+   Use the **[Python setup wizard](docs/setup-wizard.md)** to configure that
+   environment interactively on Windows or Linux.
 
 You need a DigitalOcean account/API token, a domain, `doctl`, `kubectl`, and
 Bash (WSL on Windows works). Python is only needed for local validation.
-No DigitalOcean credentials are needed by this repository's CI.
+Validation CI needs no DigitalOcean credentials. Manual deployment uses a token
+stored in the GitHub `production` environment.
 
 One worker is the economical starting point if maintenance downtime is
 acceptable. Workers, load balancer, storage and backups are separately billable;
@@ -45,6 +50,8 @@ application highly available. Do not scale Reposilite beyond one replica.
 | `k8s/maintenance/pod.yaml` | Offline backup/restore helper, excluded from deployment |
 | `tests/` | Storage, security and exposure checks |
 | `.github/workflows/validate.yml` | Credential-free validation |
+| `.github/workflows/deploy.yml` | Manual deployment to the existing DOKS cluster |
+| `scripts/setup_environment.py` | Cross-platform environment setup wizard |
 | `docs/design.md` | Architecture and tradeoffs |
 
 ## References

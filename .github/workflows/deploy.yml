@@ -1,0 +1,86 @@
+name: Deploy Reposilite
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reposilite-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/validate.yml
+
+  deploy:
+    needs: validate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: production
+      url: https://${{ vars.REPOSILITE_HOSTNAME }}
+    env:
+      DOKS_CLUSTER_ID: ${{ vars.DOKS_CLUSTER_ID }}
+      REPOSILITE_HOSTNAME: ${{ vars.REPOSILITE_HOSTNAME }}
+      DO_CERTIFICATE_NAME: ${{ vars.DO_CERTIFICATE_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate environment and create production overlay
+        run: |
+          printf 'KUBECONFIG=%s/reposilite.kubeconfig\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          python scripts/deploy.py render
+      - name: Authenticate to DigitalOcean
+        uses: digitalocean/action-doctl@3cb3953159719656269e044e0e24ca16dd2a690f # v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      - name: Select kubectl matching the target cluster
+        shell: bash
+        run: |
+          set -euo pipefail
+          doctl kubernetes cluster get "$DOKS_CLUSTER_ID" --output json > "$RUNNER_TEMP/cluster.json"
+          python - <<'PY'
+          import json, os, pathlib, re
+          cluster = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'cluster.json').read_text())[0]
+          if cluster['id'] != os.environ['DOKS_CLUSTER_ID']:
+              raise SystemExit('Unexpected cluster ID')
+          version = cluster['version'].split('-')[0].removeprefix('v')
+          if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+              raise SystemExit('Unrecognized cluster version')
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write(f'KUBECTL_VERSION=v{version}\n')
+          PY
+      - name: Install matching kubectl with checksum verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/deploy-bin"
+          cd "$RUNNER_TEMP/deploy-bin"
+          curl --fail --silent --show-error --location --retry 3 --max-time 120 \
+            "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl" -o kubectl
+          curl --fail --silent --show-error --location --retry 3 --max-time 120 \
+            "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl.sha256" -o kubectl.sha256
+          printf '%s  kubectl\n' "$(cat kubectl.sha256)" | sha256sum --check
+          chmod +x kubectl
+          echo "$RUNNER_TEMP/deploy-bin" >> "$GITHUB_PATH"
+      - name: Obtain short-lived cluster credentials
+        run: >-
+          doctl kubernetes cluster kubeconfig save "$DOKS_CLUSTER_ID"
+          --expiry-seconds 1800 --alias reposilite-deploy
+      - name: Render and deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl kustomize .local/ci > .local/ci/rendered.yaml
+          python scripts/deploy.py apply
+      - name: Remove temporary credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/reposilite.kubeconfig"

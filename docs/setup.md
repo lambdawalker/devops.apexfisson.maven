@@ -132,6 +132,9 @@ TLS terminates at the load balancer; the internal backend connection uses HTTP.
 
 ## 5. Expose HTTPS
 
+You can use the manual [GitHub deployment workflow](github-deployment.md) for
+this step and subsequent updates, or follow the local commands below.
+
 Run `mkdir -p .local` and save this as `.local/kustomization.yaml`, replacing
 the certificate name. This directory is ignored by Git:
 
