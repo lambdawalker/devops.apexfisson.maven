@@ -1,0 +1,8 @@
+.local/
+.superpowers/
+__pycache__/
+*.kubeconfig
+*.tfstate*
+.env
+backups/
+
