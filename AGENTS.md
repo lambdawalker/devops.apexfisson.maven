@@ -10,5 +10,8 @@ Read README.md and docs/design.md before changing deployment behavior.
 - Production must not import the temporary bootstrap Secret.
 - Pin container releases; verify upstream entrypoint behavior before upgrading.
 - Use kubectl kustomize plus the validation described in docs/operations.md.
-- Do not provision or destroy paid resources as part of CI.
+- Validation CI must not provision or destroy paid resources. Only the explicitly
+  dispatched Deploy Reposilite workflow may apply production resources.
+- Deployment must use the production environment, main-only execution and a
+  shared concurrency group; preserve the maintenance/bootstrap preflight checks.
 - Keep all backup/restore steps offline and preserve existing volumes on teardown.
