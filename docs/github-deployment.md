@@ -8,6 +8,11 @@ GitHub shows its **Run workflow** button.
 
 ## Configure the environment
 
+For a guided setup on Windows or Linux, use the
+[Python setup wizard](setup-wizard.md). It creates the environment and fills
+the following settings using your GitHub CLI login and a hidden token prompt.
+Alternatively, configure them manually:
+
 Open **Settings → Environments → production** in this repository. Set these
 exact names (environment variables are entered under **Environment variables**,
 not the Secrets section):

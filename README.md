@@ -28,6 +28,8 @@ Retain reduces accidental volume deletion; it does **not** provide backups.
 3. **[Operations](docs/operations.md)**: backups, restore, upgrades and diagnostics.
 4. **[GitHub deployment](docs/github-deployment.md)**: environment settings and the
    manual **Deploy Reposilite** workflow.
+   Use the **[Python setup wizard](docs/setup-wizard.md)** to configure that
+   environment interactively on Windows or Linux.
 
 You need a DigitalOcean account/API token, a domain, `doctl`, `kubectl`, and
 Bash (WSL on Windows works). Python is only needed for local validation.
@@ -49,6 +51,7 @@ application highly available. Do not scale Reposilite beyond one replica.
 | `tests/` | Storage, security and exposure checks |
 | `.github/workflows/validate.yml` | Credential-free validation |
 | `.github/workflows/deploy.yml` | Manual deployment to the existing DOKS cluster |
+| `scripts/setup_environment.py` | Cross-platform environment setup wizard |
 | `docs/design.md` | Architecture and tradeoffs |
 
 ## References
