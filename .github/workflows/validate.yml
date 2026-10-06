@@ -1,0 +1,46 @@
+name: Validate Kubernetes configuration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -r requirements-dev.txt
+          mkdir -p "$RUNNER_TEMP/validation-bin"
+          cd "$RUNNER_TEMP/validation-bin"
+          curl -fsSLO https://dl.k8s.io/release/v1.35.0/bin/linux/amd64/kubectl
+          curl -fsSLO https://dl.k8s.io/release/v1.35.0/bin/linux/amd64/kubectl.sha256
+          printf '%s  kubectl\n' "$(cat kubectl.sha256)" | sha256sum --check
+          curl -fsSLO https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          curl -fsSLO https://github.com/yannh/kubeconform/releases/download/v0.6.7/CHECKSUMS
+          grep ' kubeconform-linux-amd64.tar.gz$' CHECKSUMS | sha256sum --check
+          tar -xzf kubeconform-linux-amd64.tar.gz kubeconform
+          chmod +x kubectl kubeconform
+          echo "$RUNNER_TEMP/validation-bin" >> "$GITHUB_PATH"
+      - name: Render and check deployment safety
+        run: |
+          python -m unittest discover -s tests -v
+          kubectl kustomize k8s/base > "$RUNNER_TEMP/private.yaml"
+          kubectl kustomize k8s/overlays/production > "$RUNNER_TEMP/public.yaml"
+      - name: Validate Kubernetes schemas
+        run: >-
+          kubeconform -strict -summary -kubernetes-version 1.35.0
+          "$RUNNER_TEMP/private.yaml" "$RUNNER_TEMP/public.yaml"
+          k8s/maintenance/pod.yaml

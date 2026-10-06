@@ -1,0 +1,40 @@
+# Apply only after scaling Reposilite to zero and waiting for its pod to exit.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: reposilite-maintenance
+  namespace: reposilite
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 977
+    runAsGroup: 977
+    fsGroup: 977
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: maintenance
+      image: dzikoysk/reposilite:3.6.3
+      command: [sh, -c, "sleep 86400"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: "1"
+          memory: 256Mi
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: reposilite-data
