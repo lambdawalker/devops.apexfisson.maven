@@ -17,14 +17,16 @@ live on the PVC. Logs are ephemeral; collect them externally if needed.
 A separate public overlay changes the Service to a DigitalOcean regional HTTP
 load balancer with managed-certificate TLS termination and HTTP-to-HTTPS redirect.
 Reference the certificate by name so renewal does not require editing its UUID.
-The operator supplies DNS and the certificate. Backend traffic is HTTP within
+The setup wizard can create the DNS zone and managed certificate; the operator
+provides domain ownership and DNS delegation. Backend traffic is HTTP within
 the cluster; this is not end-to-end TLS.
 
 The simpler alternative is a single Droplet with Docker, but the requested target
 is DOKS. An ingress controller plus cert-manager is another option, useful for
 sharing one load balancer among applications; it adds components unnecessary for
 this dedicated endpoint. Terraform is not required for the first deployment;
-document explicit doctl provisioning and use manifests for application state.
+the Python setup wizard provisions through the DO API, with explicit doctl
+commands retained as an alternative. Manifests manage application state.
 
 One worker is the economical starting point, not high availability. Maintenance,
 backups and upgrades can interrupt service. A second worker can improve recovery
