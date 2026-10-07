@@ -1,12 +1,15 @@
 """Offline discovery, migration and edge resource tests."""
 import asyncio
 import importlib
+import io
 import json
 import os
 from pathlib import Path
 import sys
 import unittest
 from unittest.mock import Mock, patch
+from urllib.error import HTTPError
+from urllib.parse import urlsplit
 sys.path[:0] = [str(Path(__file__).resolve().parents[1] / p) for p in ('scripts', 'infrastructure')]
 from cloudflare import Cloudflare, discover
 from test_setup_pulumi import plan
@@ -26,6 +29,38 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_active_zone_and_email(self):
         self.assertEqual(SETTINGS, discover(self.client(), 'maven.example.org', self.answer))
+
+    def test_account_token_discovers_dns_without_user_token_verification(self):
+        client = Cloudflare('account-token-example')
+        def response(request, **kwargs):
+            path = urlsplit(request.full_url).path
+            if path == '/client/v4/user/tokens/verify':
+                raise HTTPError(request.full_url, 401, 'Account token is not a user token', {}, None)
+            if path == '/client/v4/zones':
+                result = [{'id': 'zone-id', 'name': 'example.org'}]
+            elif path == '/client/v4/zones/zone-id/dns_records':
+                result = []
+            else:
+                self.fail('Unexpected endpoint: ' + path)
+            self.assertEqual(request.get_header('Authorization'), 'Bearer account-token-example')
+            return io.BytesIO(json.dumps({'success': True, 'result': result}).encode())
+        with patch.object(client.opener, 'open', side_effect=response):
+            self.assertEqual(SETTINGS, discover(client, 'maven.example.org', self.answer))
+
+    def test_dns_permission_failure_still_stops_discovery_with_safe_operation_name(self):
+        for status in (401, 403):
+            with self.subTest(status=status):
+                client = Cloudflare('private-token-example')
+                def response(request, **kwargs):
+                    raise HTTPError(request.full_url, status, 'private-token-example', {},
+                                    io.BytesIO(b'private-token-example'))
+                zones = [{'id': 'zone-id', 'name': 'example.org'}]
+                with patch.object(client.opener, 'open', side_effect=response):
+                    with self.assertRaises(RuntimeError) as error:
+                        discover(client, 'maven.example.org', self.answer, available_zones=zones)
+                self.assertIn('DNS record listing', str(error.exception))
+                self.assertIn(f'HTTP {status}', str(error.exception))
+                self.assertNotIn('private-token-example', str(error.exception))
 
     def test_no_mutations_or_cross_origin(self):
         client = Cloudflare('private-token')
