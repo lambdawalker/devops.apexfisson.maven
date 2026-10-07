@@ -7,37 +7,29 @@ Service and persistent storage. Do not manage the same resources with both tools
 
 ## Install and authenticate
 
-Install [Pulumi CLI](https://www.pulumi.com/docs/install/) (tested with **3.268.0**),
-Python 3.10+, and GitHub CLI. From the repository root:
-
-Windows Command Prompt:
-
-```text
-py -3 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r infrastructure/requirements.txt
-pulumi login
-.venv\Scripts\python.exe scripts/setup_environment.py
-```
-
-Linux:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/),
+[Pulumi CLI](https://www.pulumi.com/docs/install/) (tested with **3.268.0**), and
+GitHub CLI. From the repository root, use the same command on Windows or Linux:
 
 ```text
-python3 -m venv .venv
-.venv/bin/python -m pip install -r infrastructure/requirements.txt
-pulumi login
-.venv/bin/python scripts/setup_environment.py
+uv run python scripts/setup_environment.py
 ```
 
-No PowerShell or shell activation is required. Python SDK versions are pinned in
-`infrastructure/requirements.txt`. The wizard uses the same Python executable for
-the Pulumi program. `--saved-login` reuses GitHub CLI authentication; it does not
-change Pulumi authentication. `--github-only` still needs only Python and gh.
+uv manages the project's Python environment and dependencies using `pyproject.toml`
+and `uv.lock`. The project requires Python 3.13 or newer; uv can provision a
+compatible Python installation. No manual virtual-environment activation, pip
+installation, PowerShell, or separate `pulumi login` command is required.
 
-`pulumi login` authenticates separately to Pulumi Cloud. The wizard uses its saved
-login or an existing `PULUMI_ACCESS_TOKEN` environment variable; it never requests
-a Pulumi token as a command-line argument. Pulumi CLI manages its own credentials.
-The wizard still privately asks for the DigitalOcean token and, by default, a
-GitHub token.
+After asking for the state backend, the wizard runs **`pulumi login <backend>`**
+interactively. Follow Pulumi's browser or token prompts in the terminal. An existing
+valid session or `PULUMI_ACCESS_TOKEN` can be reused. Pulumi CLI manages persistence
+of that login. Failed/cancelled login stops before stack selection; rerunning setup
+starts this step again. This login step does not receive your DigitalOcean token.
+
+The wizard uses the same uv Python executable to run the Pulumi program.
+`--saved-login` reuses GitHub CLI authentication; Pulumi login still runs.
+`--github-only` skips all Pulumi steps. The wizard privately asks for the
+DigitalOcean token and, by default, a GitHub token as before.
 
 ## Backend and stack
 
