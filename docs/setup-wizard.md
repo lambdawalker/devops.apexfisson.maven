@@ -19,9 +19,69 @@ virtual-environment activation are needed. Pulumi login runs interactively;
 follow its browser/token prompts. `--saved-login` reuses your GitHub CLI login;
 `--repo OWNER/REPO` selects another repository.
 
+## Guided interface
+
+The default Textual interface shows the ordered steps, their status, a progress bar,
+elapsed time for the active step, and a scrollable activity log. Progress counts
+completed steps; it does not estimate DigitalOcean deployment progress.
+Pulumi login temporarily returns to the normal terminal, then the interface resumes.
+Press Ctrl+C to request cancellation; an in-flight operation finishes before the
+wizard stops, and already-created resources are retained. Press Enter or Q to
+close the final result.
+
+Use basic terminal prompts on either Windows or Linux if preferred:
+
+```text
+uv run python scripts/setup_environment.py --plain
+```
+
+The wizard asks **“Is your domain's DNS managed by Cloudflare?”** (default: yes).
+This refers to your authoritative DNS, not the company where you registered the
+domain. Choosing no stops this Cloudflare provisioning flow before cloud changes;
+the GitHub-only mode remains available for existing infrastructure.
+
+## Save tokens locally (optional)
+
+Install GnuPG 2.2+ and ensure `gpg --version` works in the same terminal:
+[Gpg4win](https://www.gpg4win.org/) on Windows, or your Linux distribution's
+`gnupg` package (for example, `sudo apt install gnupg` on Ubuntu/Debian).
+On Windows, use native Gpg4win and place its GnuPG `bin` directory before any
+Git/MSYS GPG directory in PATH; the MSYS build uses Unix-style paths.
+See the [GnuPG downloads](https://www.gnupg.org/download/) page.
+
+```text
+uv run python scripts/save_tokens.py
+uv run python scripts/setup_environment.py
+```
+
+The save script asks for all three access tokens (GitHub, DigitalOcean, Cloudflare)
+and a passphrase of at least 12 characters, entered twice. It writes only GPG
+AES-256 ciphertext to `.local/tokens.gpg`, ignored by Git. No public/private GPG
+keypair is needed. Replacing an existing file requires confirmation, defaulting
+to no. The helper does not contact providers or validate token permissions.
+
+On setup:
+- No encrypted file: normal token prompts.
+- File found: enter its passphrase to use saved tokens for this run.
+- Incorrect passphrase: choose whether to retry, up to three attempts total.
+- Three failures, declining retry, or a blank passphrase: normal token prompts.
+- GPG unavailable: explain the fallback and use normal prompts.
+
+Failed unlocks never overwrite or delete the file. Decrypted tokens stay in
+process memory and are passed to the existing provider integrations; the
+passphrase is neither stored nor included in command arguments. GPG passphrase
+caching is disabled. Keep your passphrase in a password manager; if lost, run
+the save script to replace the file with new token entries.
+
+Both scripts accept `--plain` and `--tokens-file PATH`. Use the same custom path
+with both. `--saved-login` overrides the cached GitHub token and uses the GitHub
+CLI login instead; cached DigitalOcean/Cloudflare tokens are still used. Pulumi
+continues to manage its own login and credential storage.
+
 ## Prompts and defaults
 
-Tokens have no default and use hidden input. Other prompts offer discovered or
+Tokens use hidden input and have no displayed default. An unlocked local token file
+supplies them automatically; otherwise the wizard asks for them. Other prompts offer discovered or
 saved defaults. Saved stack configuration takes precedence on reruns.
 
 | Setting | First-run default |
@@ -55,7 +115,8 @@ DO console; cluster assignment does not imply all related resources move.
 - **GitHub:** repository administrator access. A fine-grained token needs this
   repository's Administration and Environments read/write permissions, with any
   required organization approval. Only the DigitalOcean deployment token is saved
-  as a GitHub secret; GitHub's token stays in process memory.
+  as a GitHub secret; GitHub's token is used from process memory and may optionally
+  be stored in the local GPG file described above.
 - **DigitalOcean:** Kubernetes read/create/update/access-cluster, projects read
   and assign-resource, load-balancer read, plus required dependent scopes shown
   by the token editor (such as regions, sizes and actions read). Existing legacy
@@ -117,5 +178,7 @@ uv run python scripts/setup_environment.py --github-only
 
 Choose `cloudflare` TLS mode for this architecture, or `digitalocean` for the
 legacy load-balancer certificate overlay. This mode uses saved `gh` login by
-default; `--token-auth` requests a PAT. A blank DO token keeps the existing secret.
+default when no cached token is available; `--token-auth` requests a PAT and
+`--saved-login` explicitly selects the CLI login. An unlocked cached DO token
+replaces the existing secret; during manual entry a blank DO token keeps it.
 It does not provision or validate infrastructure.

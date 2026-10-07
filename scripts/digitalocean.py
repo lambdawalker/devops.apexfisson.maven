@@ -1,4 +1,6 @@
 """Read-only, credential-safe DigitalOcean API client used by the setup wizard."""
+import setup_ui as ui
+
 from datetime import datetime, timezone
 import json
 import re
@@ -21,13 +23,14 @@ class DigitalOcean:
         self.opener = build_opener(NoRedirect())
 
     def request(self, method, path, body=None):
+        ui.check_cancelled()
         if method != 'GET' or body is not None:
-            raise ValueError('DigitalOcean mutations must go through Pulumi')
+            raise ui.InputError('DigitalOcean mutations must go through Pulumi')
         url = path if path.startswith('https://') else BASE + path
         parts = urlsplit(url)
         if (parts.scheme != 'https' or parts.netloc != 'api.digitalocean.com'
                 or not parts.path.startswith('/v2/') or parts.fragment):
-            raise ValueError('Refusing an API URL outside DigitalOcean')
+            raise ui.InputError('Refusing an API URL outside DigitalOcean')
         request = Request(url, method=method, headers={
             'Authorization': 'Bearer ' + self.token,
             'Content-Type': 'application/json', 'Accept': 'application/json',
@@ -38,11 +41,11 @@ class DigitalOcean:
                 return json.load(response)
         except HTTPError as exc:
             # Never include response body, request headers, or server error text.
-            raise RuntimeError(f'DigitalOcean {method} failed (HTTP {exc.code}). '
+            raise ui.SetupError(f'DigitalOcean {method} failed (HTTP {exc.code}). '
                                'Check token scopes, resource settings and account limits. '
                                'If creating a resource, inspect the control panel before rerunning.') from None
         except (URLError, TimeoutError, OSError, ValueError):
-            raise RuntimeError('DigitalOcean request failed or returned invalid JSON. '
+            raise ui.SetupError('DigitalOcean request failed or returned invalid JSON. '
                                'Completion is unknown; check the control panel before rerunning.') from None
 
     def list(self, path, key):
@@ -51,7 +54,7 @@ class DigitalOcean:
         visited = set()
         while next_page:
             if next_page in visited:
-                raise RuntimeError('DigitalOcean returned a repeated pagination link')
+                raise ui.SetupError('DigitalOcean returned a repeated pagination link')
             visited.add(next_page)
             page = self.request('GET', next_page)
             result.extend(page[key])
@@ -67,16 +70,16 @@ class DigitalOcean:
             if state == ('running' if key == 'kubernetes_cluster' else 'verified'):
                 return item
             if state in ('error', 'deleted', 'deleting'):
-                raise RuntimeError(f'DigitalOcean resource entered {state}; inspect the control panel')
+                raise ui.SetupError(f'DigitalOcean resource entered {state}; inspect the control panel')
             print(f'Waiting for {key}: {state or "unknown"} ...', flush=True)
             time.sleep(15)
-        raise RuntimeError(f'Waiting for {key} timed out. Resource is retained; rerun to resume.')
+        raise ui.SetupError(f'Waiting for {key} timed out. Resource is retained; rerun to resume.')
 
 
 def named(items, name):
     matches = [item for item in items if item['name'] == name]
     if len(matches) > 1:
-        raise ValueError(f'There are multiple resources named {name}; use a unique name in DigitalOcean')
+        raise ui.InputError(f'There are multiple resources named {name}; use a unique name in DigitalOcean')
     return matches[0] if matches else None
 
 
@@ -84,7 +87,7 @@ def latest_version(versions):
     slugs = [item['slug'] for item in versions
              if re.fullmatch(r'\d+\.\d+\.\d+-do\.\d+', item['slug'])]
     if not slugs:
-        raise RuntimeError('DigitalOcean returned no stable Kubernetes versions')
+        raise ui.SetupError('DigitalOcean returned no stable Kubernetes versions')
     return max(slugs, key=lambda slug: tuple(map(int, re.findall(r'\d+', slug))))
 
 
@@ -94,12 +97,12 @@ def check_certificate(cert, hostname):
         return name == hostname or (name.startswith('*.')
             and hostname.count('.') == name.count('.') and hostname.endswith(name[1:]))
     if not any(covers(name) for name in cert.get('dns_names', [])):
-        raise ValueError('Certificate does not cover the Maven hostname; choose a different certificate name')
+        raise ui.InputError('Certificate does not cover the Maven hostname; choose a different certificate name')
     if cert.get('state') == 'error':
-        raise ValueError('Certificate is in error state; repair it in DigitalOcean before rerunning')
+        raise ui.InputError('Certificate is in error state; repair it in DigitalOcean before rerunning')
     if cert.get('state') == 'verified':
         expiry = cert.get('not_after')
         if not expiry:
-            raise ValueError('Certificate has no expiry metadata; inspect it in DigitalOcean')
+            raise ui.InputError('Certificate has no expiry metadata; inspect it in DigitalOcean')
         if datetime.fromisoformat(expiry.replace('Z', '+00:00')) <= datetime.now(timezone.utc):
-            raise ValueError('Certificate has expired; renew it before continuing')
+            raise ui.InputError('Certificate has expired; renew it before continuing')

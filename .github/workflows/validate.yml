@@ -17,18 +17,35 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Install Pulumi Python SDKs for offline tests
-        run: python -m pip install -r infrastructure/requirements.txt
+      - name: Install setup dependencies for offline tests
+        run: python -m pip install -r infrastructure/requirements.txt -r requirements-dev.txt
+      - name: Install native Windows GPG
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          choco install gpg4win --yes --no-progress
+          for directory in 'C:/Program Files/GnuPG/bin' 'C:/Program Files (x86)/GnuPG/bin'; do
+            if [ -f "$directory/gpg.exe" ]; then
+              echo "$directory" >> "$GITHUB_PATH"
+              exit 0
+            fi
+          done
+          echo 'Native GnuPG installation not found' >&2
+          exit 1
+      - name: Check GPG installation
+        run: gpg --version
       - name: Test setup wizard without credentials
         run: python -m unittest discover -s tests -p "test_setup*.py" -v
-      - name: Check standalone entry point
-        run: python scripts/setup_environment.py --help
+      - name: Check standalone entry points
+        run: |
+          python scripts/setup_environment.py --help
+          python scripts/save_tokens.py --help
 
   validate:
     runs-on: ubuntu-latest
