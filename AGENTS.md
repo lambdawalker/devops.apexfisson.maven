@@ -26,3 +26,9 @@ Read README.md and docs/design.md before changing deployment behavior.
   silently recreate missing managed resources or bypass protect/preview checks.
 - Pulumi tests use SDK mocks; install infrastructure/requirements.txt for validation.
   Never provision cloud resources in validation CI.
+
+- Explicit failed-setup reset: `scripts/cleanup_environment.py` is the reviewed
+  exception for deleting associated volumes and calling cloud deletion APIs. It
+  requires an inventory and typed confirmation, journals IDs before deletion, and
+  removes Pulumi state only after verifying absence. Keep normal teardown and
+  setup protections unchanged; never execute live cleanup in validation.

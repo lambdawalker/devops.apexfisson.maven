@@ -64,6 +64,9 @@ application highly available. Do not scale Reposilite beyond one replica.
 | `scripts/save_tokens.py` | Save local tokens encrypted with a GPG passphrase |
 | `docs/design.md` | Architecture and tradeoffs |
 
+To discard a failed deployment and start fresh, see [cleanup](docs/cleanup.md).
+The cleanup script previews exact resource IDs and requires typed confirmation.
+
 ## References
 
 - [Reposilite Docker and bootstrap](https://reposilite.com/guide/docker)
