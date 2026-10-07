@@ -230,3 +230,18 @@ default when no cached token is available; `--token-auth` requests a PAT and
 `--saved-login` explicitly selects the CLI login. An unlocked cached DO token
 replaces the existing secret; during manual entry a blank DO token keeps it.
 It does not provision or validate infrastructure.
+
+## Fresh Cloudflare cluster setup
+
+The wizard creates/imports a cluster in a targeted, separately reviewed Pulumi
+plan first. Once it is recorded in state, the wizard generates a fresh full
+preview for the gateway, cert-manager and DNS, then asks for a second approval.
+Both stages apply their own saved plans. This lets the Kubernetes provider
+resolve Helm defaults during preview, avoiding first-run `violates plan` errors
+when the cluster's kubeconfig was unknown.
+
+Cancelling or failing after the cluster stage retains that cluster and its state.
+Rerun with the same backend and stack to continue. A cluster already recorded in
+state skips the bootstrap stage. GitHub settings are saved only after the full
+infrastructure stage succeeds. Do not clean up simply to retry a Helm error: a
+new cluster would need to go through bootstrap again.
