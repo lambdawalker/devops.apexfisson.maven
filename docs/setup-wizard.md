@@ -5,29 +5,23 @@ certificate, then configures the GitHub `production` environment. DigitalOcean
 assigns the cluster UUID; the wizard reads it from the API and saves it as
 `DOKS_CLUSTER_ID`. You do not choose or copy the UUID.
 
-Requires **Python 3.10+**, [GitHub CLI](https://cli.github.com/), **Pulumi CLI**,
-and the pinned Python packages in `infrastructure/requirements.txt`. Follow the
-[Pulumi install and login instructions](pulumi.md) first. PowerShell, Bash, WSL,
-doctl and kubectl are not needed for this wizard. Clone/download the whole repository, including all files in `scripts/`.
-Install Python from [python.org](https://www.python.org/downloads/) or your Linux
-package manager, install GitHub CLI, and reopen your terminal.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/),
+[GitHub CLI](https://cli.github.com/), and [Pulumi CLI](https://www.pulumi.com/docs/install/).
+Clone/download the whole repository. uv manages Python 3.13+ and the pinned project
+dependencies. PowerShell, manual venv activation, pip, doctl and kubectl are not
+needed to run this wizard.
 
 ## Run
 
-Windows Command Prompt:
+From the repository root on **Windows or Linux**:
 
 ```text
-py -3 scripts/setup_environment.py
+uv run python scripts/setup_environment.py
 ```
 
-Linux:
-
-```text
-python3 scripts/setup_environment.py
-```
-
-Use the Python executable where you installed the Pulumi SDKs (for a virtual
-environment, use the explicit executable paths in [pulumi.md](pulumi.md)).
+The wizard asks for your Pulumi backend and runs `pulumi login` interactively before
+selecting a stack. Follow its browser/token prompts; you do not need to log in
+separately. See [Pulumi setup](pulumi.md) for state and import details.
 
 The default flow privately prompts for a GitHub token and a DigitalOcean token.
 Neither token has a default; blank input is rejected. You can instead reuse your
@@ -35,10 +29,9 @@ saved GitHub CLI login:
 
 ```text
 gh auth login --hostname github.com --web
-python scripts/setup_environment.py --saved-login
+uv run python scripts/setup_environment.py --saved-login
 ```
 
-Use `py -3` or `python3` in that example if appropriate for your installation.
 The optional `--repo OWNER/REPO` flag selects a fork. `--token-auth` is still
 accepted; in the unified flow prompting for a token is already the default.
 
@@ -164,7 +157,7 @@ to its load balancer IP, and verify HTTPS/login.
 For infrastructure you prepared separately, the previous workflow is available:
 
 ```text
-python scripts/setup_environment.py --github-only
+uv run python scripts/setup_environment.py --github-only
 ```
 
 This mode uses saved `gh` login by default; add `--token-auth` for a hidden PAT

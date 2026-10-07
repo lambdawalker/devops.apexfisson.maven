@@ -112,6 +112,32 @@ class SpecTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'discovery'):
                 client.verify_ownership(plan())
 
+    def test_login_is_interactive_and_uses_selected_backend(self):
+        client = self.mod.Pulumi('pulumi', 'do-secret', 'https://api.pulumi.com')
+        with patch.object(self.mod.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run, \
+                patch('sys.stdout', new_callable=io.StringIO):
+            client.login()
+        self.assertEqual(['pulumi', 'login', 'https://api.pulumi.com'], run.call_args.args[0])
+        self.assertNotIn('capture_output', run.call_args.kwargs)
+        self.assertNotIn('stdin', run.call_args.kwargs)
+        self.assertNotIn('DIGITALOCEAN_TOKEN', run.call_args.kwargs['env'])
+
+    def test_login_failure_stops_before_stack_selection(self):
+        with patch.object(self.mod.shutil, 'which', return_value='pulumi'), \
+                patch.object(self.mod.importlib.util, 'find_spec', return_value=object()), \
+                patch.object(self.mod.Pulumi, 'login', side_effect=RuntimeError('Login failed')), \
+                patch.object(self.mod.Pulumi, 'select') as select:
+            with self.assertRaisesRegex(RuntimeError, 'Login failed'):
+                self.mod.prepare('do-secret', lambda label, default: default)
+        select.assert_not_called()
+
+    def test_login_nonzero_reports_failure(self):
+        client = self.mod.Pulumi('pulumi', 'do-secret', 'file:///tmp/state')
+        with patch.object(self.mod.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1)), \
+                patch('sys.stdout', new_callable=io.StringIO):
+            with self.assertRaisesRegex(RuntimeError, 'login failed'):
+                client.login()
+
     def test_apply_uses_saved_plan_and_only_safe_outputs(self):
         client = self.mod.Pulumi('pulumi', 'do-secret', 'https://api.pulumi.com')
         client.stack = 'owner/apexfission-maven/production'

@@ -1,6 +1,7 @@
 """Interactive Windows/Linux setup for DigitalOcean and GitHub production.
 
-Requires Python 3.10+, GitHub CLI, Pulumi CLI and infrastructure/requirements.txt.
+Run with uv run python scripts/setup_environment.py (Python 3.13+ project).
+Requires GitHub CLI and Pulumi CLI; Pulumi login is guided.
 The --github-only mode needs only Python and GitHub CLI.
 """
 import argparse

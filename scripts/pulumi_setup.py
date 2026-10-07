@@ -92,6 +92,24 @@ class Pulumi:
         self.stack = None
         self.config_file = None
 
+    def login(self):
+        print('Sign in to the selected Pulumi backend. Follow the CLI browser/token prompts.', flush=True)
+        print('An existing valid login can be reused; Pulumi manages its local credentials.', flush=True)
+        env = dict(self.env)
+        env.pop('DIGITALOCEAN_TOKEN', None)
+        try:
+            # Login needs the real terminal for browser/device prompts and hidden input.
+            # Never route it through run(), which captures output and disables interaction.
+            result = subprocess.run(
+                [self.executable, 'login', self.env['PULUMI_BACKEND_URL']],
+                cwd=ROOT / 'infrastructure', env=env, timeout=900,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError('Pulumi login timed out. Rerun setup to try signing in again.') from None
+        if result.returncode:
+            raise RuntimeError('Pulumi login failed or was cancelled. Resolve the login message above '
+                               'and rerun setup; stack selection has not started.')
+
     def run(self, *args):
         command = [self.executable, *args, '--non-interactive', '--color', 'never']
         if self.stack and args[0] in ('config', 'preview', 'up'):
@@ -179,10 +197,11 @@ class Pulumi:
 def prepare(token, ask):
     executable = shutil.which('pulumi')
     if not executable:
-        raise RuntimeError('Install Pulumi CLI and run pulumi login first; see docs/pulumi.md')
+        raise RuntimeError('Install Pulumi CLI from https://www.pulumi.com/docs/install/ and rerun setup; login is guided.')
     if any(importlib.util.find_spec(name) is None for name in ('pulumi', 'pulumi_digitalocean')):
-        raise RuntimeError('Install Python dependencies: python -m pip install -r infrastructure/requirements.txt')
+        raise RuntimeError('Run setup with uv run python scripts/setup_environment.py to install the project dependencies.')
     backend = ask('Pulumi state backend', os.environ.get('PULUMI_BACKEND_URL', 'https://api.pulumi.com'))
     client = Pulumi(executable, token, backend)
+    client.login()
     previous = client.select(ask)
     return client, previous
