@@ -76,7 +76,15 @@ class TokenStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / 'gpg-home'; home.mkdir(mode=0o700)
             path = Path(tmp) / 'cache' / 'tokens.gpg'
-            with patch.dict(os.environ, GNUPGHOME=str(home)):
+            real_run = subprocess.run
+            def diagnostic_run(*args, **kwargs):
+                result = real_run(*args, **kwargs)
+                # This test uses only fixed fake values and an isolated GPG home.
+                if '--symmetric' in args[0] and result.returncode:
+                    self.fail('Fake-token GPG encryption failed: ' + result.stderr.decode('utf-8', errors='replace'))
+                return result
+            with patch.dict(os.environ, GNUPGHOME=str(home)), \
+                    patch.object(self.store.subprocess, 'run', side_effect=diagnostic_run):
                 self.store.encrypt_tokens(TOKENS, 'fake test passphrase Ω only', path)
                 self.assertEqual(TOKENS, self.store.decrypt_tokens(path, 'fake test passphrase Ω only'))
                 with self.assertRaises(self.store.TokenStoreError):
