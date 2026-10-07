@@ -168,14 +168,19 @@ class Pulumi:
                 preferred = self.run('org', 'get-default').strip()
             except RuntimeError:
                 pass
-            organization = ask('Pulumi organization (' + ', '.join(organizations) + ')',
-                               preferred if preferred in organizations else organizations[0])
+            organization = preferred if preferred in organizations else organizations[0]
+            if not ui.supports_forms():
+                organization = ask('Pulumi organization (' + ', '.join(organizations) + ')', organization)
             if organization not in organizations:
                 raise ui.InputError('Choose a Pulumi organization from your actual memberships')
             default = f'{organization}/{PROJECT}/production'
         else:
             default = 'production'
-        self.stack = ask('Pulumi stack', default)
+        if ui.supports_forms():
+            from setup_forms import stack
+            self.stack = stack(organizations if cloud else [], preferred if cloud else None, PROJECT)
+        else:
+            self.stack = ask('Pulumi stack', default)
         if not re.fullmatch(r'[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+){0,2}', self.stack):
             raise ui.InputError('Invalid Pulumi stack name')
         if cloud and (len(self.stack.split('/')) != 3 or self.stack.split('/')[1] != PROJECT):
@@ -252,7 +257,12 @@ class Pulumi:
             summary = preview_changes(self.run('preview', '--json', '--refresh',
                                                 '--save-plan', saved, '--suppress-outputs'), self.managed_urns)
             ui.say('Changes: ' + ', '.join(f'{op}={count}' for op, count in sorted(summary.items())))
-            if ui.ask('Apply this Pulumi plan and save GitHub settings? yes/no', 'no').lower() != 'yes':
+            approved = (ui.confirm_action('Apply reviewed plan',
+                        'Changes: ' + ', '.join(f'{op}={count}' for op, count in sorted(summary.items())) +
+                        '\nThis applies the reviewed Pulumi plan, may create billable resources, and then saves GitHub settings.', 'Apply')
+                        if ui.supports_forms() else
+                        ui.ask('Apply this Pulumi plan and save GitHub settings? yes/no', 'no').lower() == 'yes')
+            if not approved:
                 ui.cancelled('Cancelled. Pulumi configuration is saved locally; no cloud/GitHub update was applied.')
                 return None
             ui.stage('provision')
@@ -267,13 +277,13 @@ class Pulumi:
         return configuration(values)
 
 
-def prepare(token, ask):
+def prepare(token, ask, backend=None):
     executable = shutil.which('pulumi')
     if not executable:
         raise ui.SetupError('Install Pulumi CLI from https://www.pulumi.com/docs/install/ and rerun setup; login is guided.')
     if any(importlib.util.find_spec(name) is None for name in ('pulumi', 'pulumi_digitalocean', 'pulumi_kubernetes', 'pulumi_cloudflare')):
         raise ui.SetupError('Run setup with uv run python scripts/setup_environment.py to install the project dependencies.')
-    backend = ask('Pulumi state backend', os.environ.get('PULUMI_BACKEND_URL', 'https://api.pulumi.com'))
+    backend = backend or ask('Pulumi state backend', os.environ.get('PULUMI_BACKEND_URL', 'https://api.pulumi.com'))
     client = Pulumi(executable, token, backend)
     client.login()
     previous = client.select(ask)

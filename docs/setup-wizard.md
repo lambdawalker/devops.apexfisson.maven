@@ -31,6 +31,31 @@ Press Ctrl+C to request cancellation; an in-flight operation finishes before the
 wizard stops, and already-created resources are retained. Press Enter or Q to
 close the final result.
 
+Configuration is entered in grouped, scrollable forms above the output panel:
+
+1. **Credentials and repository** — prefilled repository, masked saved tokens and
+   Pulumi backend. `--saved-login` omits the GitHub token field.
+2. **Pulumi stack** — organization choices from your actual memberships and the
+   stack name, after terminal login.
+3. **Infrastructure and DNS** — cluster, project, worker settings, hostname,
+   Cloudflare zone and ACME email. Choices come from provider discovery, with
+   defaults from the selected stack and GitHub. Worker fields apply only to new
+   clusters; they are disabled when an existing cluster name is entered.
+4. **Review infrastructure** — choose **Prepare preview**, inspect the resulting
+   change summary, then explicitly choose **Apply** to provision and save settings.
+
+Use **Proceed** to validate each form. Required fields and invalid values show
+errors next to the field; your other edits stay intact. Provider discovery conflicts
+are displayed on the infrastructure form with your entries preserved. Scroll or
+Tab through longer forms; the buttons and output panel remain visible. Enter in
+an input moves focus to the next control rather than submitting the form.
+Cancellation stops before the next operation and retains the debug log.
+
+In `--github-only` mode, the infrastructure forms are replaced by a **GitHub
+environment** form prefilled with existing settings, followed by **Save settings**.
+A blank DigitalOcean token keeps the existing GitHub secret. The `--plain` option
+continues to use sequential terminal prompts and yes/no confirmations.
+
 Every run saves a UTF-8 debugging log at `.local/logs/setup-<UTC timestamp>-<unique id>.log`.
 The path is displayed at startup and when the log is retained. Logs include setup
 stages, command output, exit codes, durations and safe failure details; each write

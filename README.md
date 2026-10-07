@@ -60,7 +60,7 @@ application highly available. Do not scale Reposilite beyond one replica.
 | `.github/workflows/validate.yml` | Credential-free validation |
 | `.github/workflows/deploy.yml` | Manual deployment to the existing DOKS cluster |
 | `infrastructure/` | Pulumi cluster, project assignment, gateway/TLS and Cloudflare DNS |
-| `scripts/setup_environment.py` | Textual wizard with steps, progress and plain-terminal fallback |
+| `scripts/setup_environment.py` | Textual forms with defaults, live output and plain-terminal fallback |
 | `scripts/save_tokens.py` | Save local tokens encrypted with a GPG passphrase |
 | `docs/design.md` | Architecture and tradeoffs |
 

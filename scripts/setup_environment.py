@@ -69,11 +69,17 @@ def authenticate(client):
 
 
 def confirm(repo, values, replacing):
-    ui.say(f"\nRepository: {repo}\nEnvironment: {ENVIRONMENT}")
+    summary = []
+    def report(message):
+        summary.append(message)
+        ui.say(message)
+    report(f"\nRepository: {repo}\nEnvironment: {ENVIRONMENT}")
     for name, value in values.items():
-        ui.say(f"  {name} = {value}")
-    ui.say(f"  {SECRET}: {'set/replace (hidden)' if replacing else 'keep existing'}")
-    ui.say("Existing variables with these names will be updated; other settings are preserved.")
+        report(f"  {name} = {value}")
+    report(f"  {SECRET}: {'set/replace (hidden)' if replacing else 'keep existing'}")
+    report("Existing variables with these names will be updated; other settings are preserved.")
+    if ui.supports_forms():
+        return ui.confirm_action('Review GitHub settings', '\n'.join(summary), 'Save settings')
     return ask("Save these settings to GitHub? yes/no", "no").lower() == "yes"
 
 
@@ -144,6 +150,10 @@ def execute(args):
     args.tokens = load_tokens(args.tokens_file, ask, hidden, ui.say)
     ui.register_secrets(args.tokens.values())
     ui.stage("github")
+    if ui.supports_forms():
+        from setup_forms import credentials
+        if not credentials(args, DEFAULT_REPO):
+            return
     if not args.github_only:
         from setup_cloud import run
         run(args)
@@ -177,17 +187,22 @@ def execute(args):
             "variable", "list", "--repo", repo, "--env", ENVIRONMENT, "--json", "name,value"))}
         secret_exists = SECRET in {item["name"] for item in json.loads(client.run(
             "secret", "list", "--repo", repo, "--env", ENVIRONMENT, "--json", "name"))}
-    mode = ask("TLS mode (cloudflare/digitalocean)", defaults.get("TLS_MODE", "cloudflare"))
-    values = configuration({
-        "TLS_MODE": mode,
-        "DOKS_CLUSTER_ID": ask("DOKS cluster UUID", defaults.get("DOKS_CLUSTER_ID", "")),
-        "REPOSILITE_HOSTNAME": ask("Maven hostname", defaults.get("REPOSILITE_HOSTNAME", "")),
-        "DO_CERTIFICATE_NAME": (ask("DO certificate name", defaults.get("DO_CERTIFICATE_NAME", ""))
-                                if mode == "digitalocean" else ""),
-    })
-    ui.stage("review")
-    suffix = " (Enter keeps existing)" if secret_exists else " (required)"
-    token = args.tokens.get("digitalocean") or hidden(f"DigitalOcean API token{suffix}: ")
+    if ui.supports_forms():
+        from setup_forms import github_environment
+        values, token = github_environment(defaults, args.tokens, secret_exists)
+        ui.stage("review")
+    else:
+        mode = ask("TLS mode (cloudflare/digitalocean)", defaults.get("TLS_MODE", "cloudflare"))
+        values = configuration({
+            "TLS_MODE": mode,
+            "DOKS_CLUSTER_ID": ask("DOKS cluster UUID", defaults.get("DOKS_CLUSTER_ID", "")),
+            "REPOSILITE_HOSTNAME": ask("Maven hostname", defaults.get("REPOSILITE_HOSTNAME", "")),
+            "DO_CERTIFICATE_NAME": (ask("DO certificate name", defaults.get("DO_CERTIFICATE_NAME", ""))
+                                    if mode == "digitalocean" else ""),
+        })
+        ui.stage("review")
+        suffix = " (Enter keeps existing)" if secret_exists else " (required)"
+        token = args.tokens.get("digitalocean") or hidden(f"DigitalOcean API token{suffix}: ")
     if not token and not secret_exists:
         raise ui.InputError("A DigitalOcean token is required for a new setup")
     if any(char.isspace() or ord(char) < 32 for char in token):
