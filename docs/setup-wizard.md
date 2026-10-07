@@ -5,9 +5,10 @@ certificate, then configures the GitHub `production` environment. DigitalOcean
 assigns the cluster UUID; the wizard reads it from the API and saves it as
 `DOKS_CLUSTER_ID`. You do not choose or copy the UUID.
 
-Requires **Python 3.10+** and [GitHub CLI](https://cli.github.com/) on PATH.
-No pip packages, PowerShell, Bash, WSL, doctl or kubectl are needed for this
-wizard. Clone/download the whole repository, including all files in `scripts/`.
+Requires **Python 3.10+**, [GitHub CLI](https://cli.github.com/), **Pulumi CLI**,
+and the pinned Python packages in `infrastructure/requirements.txt`. Follow the
+[Pulumi install and login instructions](pulumi.md) first. PowerShell, Bash, WSL,
+doctl and kubectl are not needed for this wizard. Clone/download the whole repository, including all files in `scripts/`.
 Install Python from [python.org](https://www.python.org/downloads/) or your Linux
 package manager, install GitHub CLI, and reopen your terminal.
 
@@ -25,6 +26,9 @@ Linux:
 python3 scripts/setup_environment.py
 ```
 
+Use the Python executable where you installed the Pulumi SDKs (for a virtual
+environment, use the explicit executable paths in [pulumi.md](pulumi.md)).
+
 The default flow privately prompts for a GitHub token and a DigitalOcean token.
 Neither token has a default; blank input is rejected. You can instead reuse your
 saved GitHub CLI login:
@@ -41,11 +45,13 @@ accepted; in the unified flow prompting for a token is already the default.
 ## Defaults
 
 Press Enter to accept a configuration default. Tokens are always hidden and
-never included in the preview. Existing GitHub values take priority on reruns.
+never included in the preview. Existing Pulumi stack configuration takes priority on reruns, then GitHub values.
 
 | Setting | Default |
 | --- | --- |
 | GitHub repository | `lambdawalker/devops.apexfisson.maven` |
+| Pulumi backend | Pulumi Cloud, or `PULUMI_BACKEND_URL` when set |
+| Pulumi stack | `<Pulumi account>/apexfission-maven/production` (DIY: `production`) |
 | GitHub environment | Fixed `production`, matching the workflow |
 | Cluster name | Existing GitHub cluster's name, otherwise `apexfission-maven` |
 | Region for new cluster | `nyc1`, or first supported region if unavailable |
@@ -62,7 +68,8 @@ If there are no existing domains, the hostname prompt suggests
 own. Review the DNS zone default, especially for apex hostnames and domains such
 as `example.co.uk`; the script does not infer domain ownership or buy a domain.
 Region, worker and version prompts appear only when creating a cluster. Existing
-clusters retain their current configuration. Cluster names must be unique in the
+clusters are imported with configuration preservation enabled; established Pulumi
+stacks retain their declared configuration on reruns. Cluster names must be unique in the
 DO account; ambiguous matches stop setup.
 
 New clusters have control-plane HA disabled, automatic and surge upgrades enabled,
@@ -85,7 +92,7 @@ for [environments](https://docs.github.com/en/rest/deployments/environments),
 Create a DigitalOcean token for the team that will own the resources. For custom
 scopes, enable:
 
-- `kubernetes:read`, `kubernetes:create`, and `kubernetes:access_cluster` (the last
+- `kubernetes:read`, `kubernetes:create`, `kubernetes:update`, and `kubernetes:access_cluster` (the last
   is needed by the deployment workflow).
 - `certificate:read` and `certificate:create` for TLS.
 - `domain:read`, `domain:create`, and `domain:update` for DNS and managed issuance.
@@ -124,40 +131,33 @@ imported certificate when its DNS-name metadata is available. External DNS users
 can import their own certificate in DO beforehand and choose its name, without
 creating a new DO zone. Renewal of imported certificates remains your responsibility.
 
-Certificate readiness is checked **before creating a cluster**. The wizard waits
-up to 15 minutes for issuance, then up to 30 minutes for a running cluster,
-printing progress. Resource creation requests are never blindly retried. See
-[DO certificate API](https://docs.digitalocean.com/reference/api/reference/certificates/)
-and [Kubernetes API](https://docs.digitalocean.com/products/kubernetes/reference/api/).
+Certificate readiness is checked **before creating a cluster**. Pulumi manages
+provisioning, with an explicit dependency from the cluster to the certificate.
+Existing certificates must already be verified before import. Pulumi's provider
+handles readiness and API retries; interrupted operations may leave state/resources.
 
 ## Changes, reruns and remaining steps
 
-After showing the plan, the wizard requires `yes` to proceed. It then:
+The wizard prepares a Pulumi preview, displays nonsecret desired configuration and
+resource operations, then requires `yes` before applying the saved plan. It refuses
+deletes/replacements and protects owned resources. Afterwards it saves the generated
+UUID, hostname, certificate name and DO token in GitHub `production`, preserving
+existing environment protections. GitHub secret contents cannot be read back; only
+metadata is verified.
 
-1. Creates/reuses the DNS zone and certificate as applicable; waits for TLS issuance.
-2. Creates/reuses the cluster, prints its UUID, and waits for readiness.
-3. Creates GitHub `production` only if absent, preserving existing protections.
-4. Saves `DOKS_CLUSTER_ID`, `REPOSILITE_HOSTNAME`, `DO_CERTIFICATE_NAME`, and the
-   `DIGITALOCEAN_ACCESS_TOKEN` secret; verifies values and secret metadata.
-
-This is not atomic. Resources are retained on failure; some GitHub settings may
-already have changed. Read the reported stage/error, inspect the DO control panel
-and GitHub environment, and rerun using the same resource names. If a create
-request timed out, check that it completed before rerunning; do not start concurrent
-wizards. Existing resources are not resized, upgraded, deleted or replaced. A
-certificate in `error` needs repair in DO or a new certificate name before retrying.
-Old GitHub secrets cannot be read back or automatically restored. Interrupted
-runs may leave billable workers; delete unwanted resources explicitly in DO only
-after checking for data you need.
+Use the same backend and stack on every rerun. Imported resources start in a
+preservation mode; newly created resources can be updated through Pulumi config.
+State/config recovery, ownership checks, import IDs, encrypted state and deliberate
+updates are explained in [Pulumi infrastructure](pulumi.md). Do not run concurrent
+wizards or manage the same resource from multiple stacks. No rollback is attempted
+on failure; inspect the stack and GitHub settings before rerunning.
 
 **The wizard prepares infrastructure; it does not expose an uninitialized Maven
 repository.** Continue with [setup.md](setup.md): connect to the created cluster
 using doctl/kubectl, then complete steps 2–3 to install the private base and create
-a persistent Reposilite administrator. Those existing shell examples use Bash/WSL.
-Then run [Deploy Reposilite](github-deployment.md), create the hostname A record
-pointing to the new load balancer IP, and verify HTTPS/login. No workflow,
-application deployment, administrator token, load balancer or A record is created
-by this wizard.
+a persistent Reposilite administrator. Those shell examples use Bash/WSL. Then
+run [Deploy Reposilite](github-deployment.md), create the hostname A record pointing
+to its load balancer IP, and verify HTTPS/login.
 
 ## GitHub-only mode
 

@@ -15,3 +15,10 @@ Read README.md and docs/design.md before changing deployment behavior.
 - Deployment must use the production environment, main-only execution and a
   shared concurrency group; preserve the maintenance/bootstrap preflight checks.
 - Keep all backup/restore steps offline and preserve existing volumes on teardown.
+
+- Pulumi in infrastructure/ owns DigitalOcean infrastructure only. Keep DO discovery
+  read-only and do not give Pulumi ownership of application/PVC/Service resources.
+- Preserve stack identity and imported resource settings on setup reruns. Never
+  silently recreate missing managed resources or bypass protect/preview checks.
+- Pulumi tests use SDK mocks; install infrastructure/requirements.txt for validation.
+  Never provision cloud resources in validation CI.

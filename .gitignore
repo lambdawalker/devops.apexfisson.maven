@@ -6,3 +6,7 @@ __pycache__/
 .env
 backups/
 
+
+.venv/
+.pulumi/
+infrastructure/Pulumi.*.yaml
