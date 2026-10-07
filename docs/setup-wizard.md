@@ -167,6 +167,12 @@ DO console; cluster assignment does not imply all related resources move.
   Kubernetes controllers create the gateway load balancer and later PVC volume.
 - **Cloudflare:** create a scoped API token with **Zone:DNS:Edit** and
   **Zone:Zone:Read**, restricted to **apexfission.com** (or your selected zone).
+  Both user API tokens (My Profile → API Tokens) and account API tokens
+  (Manage Account → Account API Tokens) are supported. Discovery validates access
+  by reading zones and DNS records; it does not call the user-only token verification
+  endpoint. No API-token-management permission is needed. Read-only discovery
+  cannot prove DNS write access, so **DNS Edit** is still required for provisioning
+  and certificate renewal. Errors identify zone listing versus DNS record listing.
   Do not use the Global API Key. It supports Pulumi's DNS record and cert-manager's
   temporary DNS challenge records. The zone must already exist and be active.
 - **Pulumi:** login uses Pulumi's normal local credential storage. No Pulumi token

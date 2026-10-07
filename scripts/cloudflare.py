@@ -25,17 +25,25 @@ class Cloudflare:
         parts = urlsplit(url)
         if parts.netloc != 'api.cloudflare.com' or not parts.path.startswith('/client/v4/') or parts.fragment:
             raise ui.InputError('Refusing an API URL outside Cloudflare')
+        # Fixed operation names identify failures without echoing tokens, query
+        # strings, response bodies, or arbitrary caller-controlled paths.
+        if parts.path == '/client/v4/zones':
+            operation = 'zone listing'
+        elif re.fullmatch(r'/client/v4/zones/[^/]+/dns_records', parts.path):
+            operation = 'DNS record listing'
+        else:
+            operation = 'API request'
         req = Request(url, headers={'Authorization': 'Bearer ' + self.token, 'Accept': 'application/json'})
         try:
             with self.opener.open(req, timeout=60) as response:
                 result = json.load(response)
             if not result.get('success'):
-                raise ui.SetupError('Cloudflare GET failed; check token scopes and selected zone')
+                raise ui.SetupError(f'Cloudflare {operation} failed; check token scopes and selected zone')
             return result
         except HTTPError as exc:
-            raise ui.SetupError(f'Cloudflare GET failed (HTTP {exc.code}); check token scopes and zone access') from None
+            raise ui.SetupError(f'Cloudflare {operation} failed (HTTP {exc.code}); check token scopes and zone access') from None
         except (URLError, OSError, ValueError):
-            raise ui.SetupError('Cloudflare GET failed or returned invalid JSON; check connectivity and token scopes') from None
+            raise ui.SetupError(f'Cloudflare {operation} failed or returned invalid JSON; check connectivity and token scopes') from None
 
     def list(self, path, **filters):
         items = []
@@ -49,9 +57,10 @@ class Cloudflare:
 
 
 def discover(client, hostname, ask, previous=None, available_zones=None):
-    identity = client.request('GET', '/user/tokens/verify')['result']
-    if identity.get('status') != 'active':
-        raise ui.InputError('Cloudflare API token must be active')
+    # User- and account-owned tokens both authenticate the zone/DNS APIs.
+    # The user-only verification endpoint rejects valid account tokens. The
+    # authenticated reads below validate access and still fail closed on denial;
+    # successful discovery does not prove DNS write permission.
     zones = [z for z in (available_zones if available_zones is not None else client.list('/zones', status='active'))
              if hostname == z['name'] or hostname.endswith('.' + z['name'])]
     if not zones:
