@@ -1,6 +1,7 @@
 """Interactive Windows/Linux setup for DigitalOcean and GitHub production.
 
-Requires Python 3.10+ and GitHub CLI. Uses only the Python standard library.
+Requires Python 3.10+, GitHub CLI, Pulumi CLI and infrastructure/requirements.txt.
+The --github-only mode needs only Python and GitHub CLI.
 """
 import argparse
 import getpass

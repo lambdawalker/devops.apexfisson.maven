@@ -7,6 +7,7 @@ from digitalocean import DigitalOcean, named, latest_version, check_certificate
 from setup_environment import (GitHub, ENVIRONMENT, DEFAULT_REPO, ask, hidden,
                                authenticate, save)
 from deploy import configuration
+from pulumi_setup import prepare, build_spec
 
 
 def token(label):
@@ -22,13 +23,13 @@ def collect(client, defaults):
     certificates = client.list('/certificates', 'certificates')
     previous = next((c for c in clusters if c['id'] == defaults.get('DOKS_CLUSTER_ID')), None)
     cluster_name = ask('Cluster name (existing names are reused)',
-                       previous['name'] if previous else 'apexfission-maven')
+                       previous['name'] if previous else defaults.get('DOKS_CLUSTER_NAME', 'apexfission-maven'))
     if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', cluster_name):
         raise ValueError('Cluster name must use 1-63 lowercase letters, numbers or internal hyphens')
     cluster = named(clusters, cluster_name)
     body = None
     if cluster:
-        print(f'Reusing cluster {cluster["id"]}; its configuration will not be changed.')
+        print(f'Found cluster {cluster["id"]}. Pulumi will import or reconcile its declared configuration.')
     else:
         options = client.request('GET', '/kubernetes/options')['options']
         regions = [item['slug'] for item in options['regions']]
@@ -65,6 +66,11 @@ def collect(client, defaults):
     create_domain = False
     if certificate:
         check_certificate(certificate, hostname)
+        if certificate.get('state') != 'verified':
+            raise ValueError('Existing certificate must be verified before Pulumi import')
+        if certificate.get('type') == 'lets_encrypt':
+            matching = [d for d in domain_names if hostname == d or hostname.endswith('.' + d)]
+            domain = max(matching, key=len) if matching else None
     else:
         matching = [d for d in domain_names if hostname == d or hostname.endswith('.' + d)]
         domain = ask('DNS zone (domain you own)', max(matching, key=len) if matching
@@ -101,47 +107,29 @@ def review(repo, plan):
     print('Save generated cluster UUID, hostname and certificate name to GitHub; '
           'set/replace DIGITALOCEAN_ACCESS_TOKEN (hidden).')
     print('Existing GitHub environment protection rules are preserved.')
-    return ask('Create/reuse these resources and save GitHub settings? yes/no', 'no').lower() == 'yes'
+    return ask('Prepare a Pulumi preview for these resources? yes/no', 'no').lower() == 'yes'
 
 
-def provision(client, github, repo, plan, do_token, existing):
-    stage = 'DNS/certificate setup'
+def provision(client, github, repo, plan, do_token, existing, pulumi_client, previous=None):
+    stage = 'Pulumi infrastructure setup'
     try:
-        if plan['create_domain']:
-            client.request('POST', '/domains', {'name': plan['domain']})
-            print(f'DNS zone created: {plan["domain"]}. Ensure registrar delegation is complete.')
-        cert = plan['certificate']
-        if not cert:
-            cert = client.request('POST', '/certificates', {
-                'name': plan['certificate_name'], 'type': 'lets_encrypt',
-                'dns_names': [plan['hostname']],
-            })['certificate']
-            print(f'Certificate created: {cert["id"]}', flush=True)
-        cert = client.wait('/certificates/' + cert['id'], 'certificate', timeout=900)
-        check_certificate(cert, plan['hostname'])
-        stage = 'cluster setup'
-        cluster = plan['cluster']
-        if not cluster:
-            cluster = client.request('POST', '/kubernetes/clusters',
-                                     plan['cluster_body'])['kubernetes_cluster']
-        print(f'DOKS cluster UUID: {cluster["id"]}', flush=True)
-        ready = client.wait('/kubernetes/clusters/' + cluster['id'], 'kubernetes_cluster')
-        values = configuration({'DOKS_CLUSTER_ID': ready['id'],
-                                'REPOSILITE_HOSTNAME': plan['hostname'],
-                                'DO_CERTIFICATE_NAME': plan['certificate_name']})
+        spec = build_spec(plan, previous)
+        pulumi_client.verify_ownership(plan)
+        values = pulumi_client.apply(spec)
+        if values is None:
+            return
+        print(f'DOKS cluster UUID: {values["DOKS_CLUSTER_ID"]}', flush=True)
         stage = 'GitHub environment setup'
         save(github, repo, values, do_token, existing)
     except (RuntimeError, ValueError) as exc:
-        # Resource ids are printed as soon as known. Do not expose provider payloads.
-        raise RuntimeError(f'Setup stopped during {stage}. Created resources are retained; '
-                           'no automatic rollback was attempted. Check the DigitalOcean control panel '
-                           'and GitHub settings, then rerun with the same names to resume. '
-                           'For certificate failures, check DNS delegation and certificate state. ' + str(exc)) from None
+        raise RuntimeError(f'Setup stopped during {stage}. Resources and Pulumi state are retained; '
+                           'no rollback was attempted. Inspect the selected stack and GitHub settings, '
+                           'then rerun with the same backend and stack. ' + str(exc)) from None
     print('\nInfrastructure and GitHub environment configured; variables and secret metadata verified.')
     print(f'GitHub settings: https://github.com/{repo}/settings/environments')
     print('Next: follow docs/setup.md steps 2-3 to install privately and create a persistent admin.')
     print('Then run Actions > Deploy Reposilite on main and point the hostname A record at the LB IP.')
-    print('No application deployment or workflow was triggered. See docs/setup-wizard.md for details.')
+    print('No application deployment or workflow was triggered. See docs/pulumi.md for infrastructure updates.')
 
 
 def run(args):
@@ -168,8 +156,17 @@ def run(args):
             'variable', 'list', '--repo', repo, '--env', ENVIRONMENT, '--json', 'name,value'))}
     do_token = token('DigitalOcean')
     client = DigitalOcean(do_token)
+    pulumi_client, previous = prepare(do_token, ask)
+    if previous:
+        defaults.update({
+            'DOKS_CLUSTER_NAME': previous['cluster']['properties']['name'],
+            'REPOSILITE_HOSTNAME': previous['hostname'],
+            'DO_CERTIFICATE_NAME': previous['certificate']['name'],
+        })
+        # The selected stack is authoritative even if GitHub points to another cluster.
+        defaults.pop('DOKS_CLUSTER_ID', None)
     plan = collect(client, defaults)
     if not review(repo, plan):
-        print('Cancelled. No resources or settings were changed.')
+        print('Cancelled. No cloud resources or GitHub settings were changed.')
         return
-    provision(client, github, repo, plan, do_token, existing)
+    provision(client, github, repo, plan, do_token, existing, pulumi_client, previous)

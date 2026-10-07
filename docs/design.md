@@ -24,9 +24,11 @@ the cluster; this is not end-to-end TLS.
 The simpler alternative is a single Droplet with Docker, but the requested target
 is DOKS. An ingress controller plus cert-manager is another option, useful for
 sharing one load balancer among applications; it adds components unnecessary for
-this dedicated endpoint. Terraform is not required for the first deployment;
-the Python setup wizard provisions through the DO API, with explicit doctl
-commands retained as an alternative. Manifests manage application state.
+this dedicated endpoint. Pulumi manages DigitalOcean infrastructure through a Python project, driven by
+the interactive setup wizard. Its protected resources, shared state, imports and
+reviewed plans are described in [pulumi.md](pulumi.md). Direct DO API calls in the
+wizard are read-only discovery. Manifests and the existing deployment action
+continue to manage application state; Pulumi does not manage Kubernetes objects.
 
 One worker is the economical starting point, not high availability. Maintenance,
 backups and upgrades can interrupt service. A second worker can improve recovery

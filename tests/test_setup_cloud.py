@@ -17,14 +17,14 @@ class CloudTests(unittest.TestCase):
                         'DigitalOcean provisioning adapter is missing')
         self.do = importlib.import_module('digitalocean')
 
-    def test_post_failure_is_redacted_and_not_retried(self):
+    def test_api_failure_is_redacted_and_not_retried(self):
         secret = 'private-test-token'
         client = self.do.DigitalOcean(secret)
         with patch.object(client.opener, 'open', side_effect=HTTPError(
                 'https://api.digitalocean.com/v2/kubernetes/clusters', 403,
                 secret, {}, io.BytesIO(secret.encode()))) as request:
             with self.assertRaises(RuntimeError) as error:
-                client.request('POST', '/kubernetes/clusters', {'name': 'maven'})
+                client.request('GET', '/kubernetes/clusters')
         self.assertNotIn(secret, str(error.exception))
         self.assertIn('403', str(error.exception))
         self.assertEqual(1, request.call_count)
@@ -40,6 +40,14 @@ class CloudTests(unittest.TestCase):
                 '/kubernetes/clusters', 'kubernetes_clusters')])
         with self.assertRaises(ValueError):
             client.request('GET', 'https://other.example/steal')
+
+    def test_discovery_client_refuses_cloud_mutations(self):
+        client = self.do.DigitalOcean('private-test-token')
+        with patch.object(client.opener, 'open') as request:
+            for method in ('POST', 'PUT', 'DELETE'):
+                with self.assertRaisesRegex(ValueError, 'Pulumi'):
+                    client.request(method, '/kubernetes/clusters')
+        request.assert_not_called()
 
     def test_redirects_are_rejected(self):
         with self.assertRaises(HTTPError):
@@ -93,62 +101,45 @@ class ProvisionTests(unittest.TestCase):
                              {'name': 'maven', 'size': 's-2vcpu-4gb', 'count': 1}],
                          'ha': False, 'auto_upgrade': True, 'surge_upgrade': True}}
 
-    def client(self, fail_certificate=False):
+    def pulumi_client(self):
         from unittest.mock import Mock
         client = Mock()
-        def request(method, path, body=None):
-            if path == '/domains':
-                return {'domain': {'name': 'example.org'}}
-            if path == '/certificates':
-                return {'certificate': self.cert}
-            if path == '/kubernetes/clusters':
-                return {'kubernetes_cluster': self.cluster}
-            raise AssertionError(path)
-        def wait(path, key, **kwargs):
-            if key == 'certificate':
-                if fail_certificate:
-                    raise RuntimeError('Certificate timed out')
-                return self.cert
-            return self.cluster
-        client.request.side_effect = request
-        client.wait.side_effect = wait
+        client.apply.return_value = {'DOKS_CLUSTER_ID': self.cluster['id'],
+            'REPOSILITE_HOSTNAME': 'maven.example.org', 'DO_CERTIFICATE_NAME': 'maven-tls'}
         return client
 
     def test_generated_uuid_is_handed_to_github_and_secret_not_printed(self):
-        client = self.client()
+        client = self.pulumi_client()
         with patch.object(self.wizard, 'save') as save, patch('sys.stdout', new_callable=io.StringIO) as out:
-            self.wizard.provision(client, object(), 'owner/repo', self.plan, 'do-secret', False)
-        values = save.call_args.args[2]
-        self.assertEqual(self.cluster['id'], values['DOKS_CLUSTER_ID'])
-        self.assertEqual('maven.example.org', values['REPOSILITE_HOSTNAME'])
+            self.wizard.provision(None, object(), 'owner/repo', self.plan, 'do-secret', False, client)
+        self.assertEqual(self.cluster['id'], save.call_args.args[2]['DOKS_CLUSTER_ID'])
         self.assertEqual('do-secret', save.call_args.args[3])
         self.assertNotIn('do-secret', out.getvalue())
-        self.assertEqual(['/domains', '/certificates', '/kubernetes/clusters'],
-                         [c.args[1] for c in client.request.call_args_list])
+        self.assertNotIn('do-secret', str(client.apply.call_args))
 
-    def test_certificate_failure_stops_before_billable_cluster_and_github(self):
-        client = self.client(fail_certificate=True)
-        with patch.object(self.wizard, 'save') as save, patch('sys.stdout', new_callable=io.StringIO):
+    def test_pulumi_failure_stops_before_github(self):
+        client = self.pulumi_client()
+        client.apply.side_effect = RuntimeError('Certificate failed')
+        with patch.object(self.wizard, 'save') as save:
             with self.assertRaisesRegex(RuntimeError, 'retained'):
-                self.wizard.provision(client, object(), 'owner/repo', self.plan, 'do-secret', False)
-        self.assertFalse(save.called)
-        self.assertFalse(any(c.args[1] == '/kubernetes/clusters' for c in client.request.call_args_list))
+                self.wizard.provision(None, object(), 'owner/repo', self.plan, 'do-secret', False, client)
+        save.assert_not_called()
 
-    def test_existing_resources_reused_without_mutation(self):
-        self.plan.update(cluster=self.cluster, certificate=self.cert, create_domain=False)
-        client = self.client()
-        with patch.object(self.wizard, 'save'), patch('sys.stdout', new_callable=io.StringIO):
-            self.wizard.provision(client, object(), 'owner/repo', self.plan, 'do-secret', True)
-        client.request.assert_not_called()
+    def test_cancelled_pulumi_preview_does_not_save_github(self):
+        client = self.pulumi_client()
+        client.apply.return_value = None
+        with patch.object(self.wizard, 'save') as save:
+            self.wizard.provision(None, object(), 'owner/repo', self.plan, 'do-secret', False, client)
+        save.assert_not_called()
 
     def test_github_failure_keeps_cluster_and_reports_uuid(self):
-        client = self.client()
+        client = self.pulumi_client()
         with patch.object(self.wizard, 'save', side_effect=RuntimeError('GitHub failed')), \
                 patch('sys.stdout', new_callable=io.StringIO) as out:
             with self.assertRaisesRegex(RuntimeError, 'retained'):
-                self.wizard.provision(client, object(), 'owner/repo', self.plan, 'do-secret', False)
+                self.wizard.provision(None, object(), 'owner/repo', self.plan, 'do-secret', False, client)
         self.assertIn(self.cluster['id'], out.getvalue())
-        self.assertFalse(any(c.args[0] == 'DELETE' for c in client.request.call_args_list))
+        self.assertEqual(['verify_ownership', 'apply'], [c[0] for c in client.method_calls])
 
     def test_new_cluster_prompt_defaults_and_cancel(self):
         from unittest.mock import Mock
@@ -206,6 +197,7 @@ class ProvisionTests(unittest.TestCase):
                 patch.object(self.wizard, 'GitHub', return_value=github), \
                 patch.object(self.wizard, 'token', side_effect=['gh-secret', 'do-secret']), \
                 patch.object(self.wizard, 'DigitalOcean'), \
+                patch.object(self.wizard, 'prepare', return_value=(Mock(), None)), \
                 patch.object(self.wizard, 'collect', return_value=self.plan), \
                 patch.object(self.wizard, 'review', return_value=False), \
                 patch.object(self.wizard, 'provision') as provision, \

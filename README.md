@@ -31,8 +31,9 @@ Retain reduces accidental volume deletion; it does **not** provide backups.
 5. **[GitHub deployment](docs/github-deployment.md)**: environment settings and the
    manual **Deploy Reposilite** workflow.
 
-The setup wizard needs Python 3.10+, GitHub CLI, access tokens and a domain you
-own. The remaining private administrator setup uses `doctl`, `kubectl`, and
+The setup wizard needs Python 3.10+, GitHub CLI, Pulumi CLI and Python SDKs,
+access tokens and a domain you own. Start with [Pulumi setup](docs/pulumi.md) for
+installation, state storage and importing existing infrastructure. The remaining private administrator setup uses `doctl`, `kubectl`, and
 Bash (WSL on Windows works).
 Validation CI needs no DigitalOcean credentials. Manual deployment uses a token
 stored in the GitHub `production` environment.
@@ -52,6 +53,7 @@ application highly available. Do not scale Reposilite beyond one replica.
 | `tests/` | Storage, security and exposure checks |
 | `.github/workflows/validate.yml` | Credential-free validation |
 | `.github/workflows/deploy.yml` | Manual deployment to the existing DOKS cluster |
+| `infrastructure/` | Pulumi Python project for DigitalOcean infrastructure |
 | `scripts/setup_environment.py` | Cross-platform DigitalOcean and GitHub setup wizard |
 | `docs/design.md` | Architecture and tradeoffs |
 

@@ -1,4 +1,4 @@
-"""Small, credential-safe DigitalOcean API client used by the setup wizard."""
+"""Read-only, credential-safe DigitalOcean API client used by the setup wizard."""
 from datetime import datetime, timezone
 import json
 import re
@@ -21,6 +21,8 @@ class DigitalOcean:
         self.opener = build_opener(NoRedirect())
 
     def request(self, method, path, body=None):
+        if method != 'GET' or body is not None:
+            raise ValueError('DigitalOcean mutations must go through Pulumi')
         url = path if path.startswith('https://') else BASE + path
         parts = urlsplit(url)
         if (parts.scheme != 'https' or parts.netloc != 'api.digitalocean.com'

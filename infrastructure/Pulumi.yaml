@@ -1,0 +1,4 @@
+name: apexfission-maven
+runtime: python
+description: DigitalOcean infrastructure for the ApexFission Maven repository
+stackConfigDir: ../.local/pulumi
