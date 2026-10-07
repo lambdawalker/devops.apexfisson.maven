@@ -28,8 +28,9 @@ jobs:
       - name: Install native Windows GPG
         if: runner.os == 'Windows'
         shell: bash
+        timeout-minutes: 5
         run: |
-          choco install gpg4win --yes --no-progress
+          choco install gnupg --version=2.5.21 --yes --no-progress --execution-timeout=180
           for directory in 'C:/Program Files/GnuPG/bin' 'C:/Program Files (x86)/GnuPG/bin'; do
             if [ -f "$directory/gpg.exe" ]; then
               echo "$directory" >> "$GITHUB_PATH"
