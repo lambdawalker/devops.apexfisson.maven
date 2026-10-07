@@ -63,7 +63,8 @@ For new clusters, auto-upgraded version drift is ignored to avoid downgrades.
 ## Migrate the failed DigitalOcean DNS setup
 
 For the reported partial stack `isdavid/apexfission-maven/production`, continue
-with that exact stack and choose the Cloudflare migration when prompted.
+with that exact stack and answer yes to “Is your domain's DNS managed by
+Cloudflare?”. Review the migration details and preview before applying.
 
 - Retain the previously created DigitalOcean zone in the same Pulumi state. It is
   non-authoritative while nameservers remain at Cloudflare, so no DNS cutover occurs.

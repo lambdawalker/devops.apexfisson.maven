@@ -13,6 +13,10 @@ import shutil
 import subprocess
 import sys
 import warnings
+from pathlib import Path
+
+import setup_ui as ui
+from token_store import DEFAULT_PATH, load_tokens
 
 from deploy import configuration
 
@@ -30,16 +34,17 @@ class GitHub:
             self.env["GH_TOKEN"] = token
 
     def run(self, *args, stdin=None):
+        ui.check_cancelled()
         try:
             result = subprocess.run(
                 [self.executable, *args], input=stdin, text=True, encoding="utf-8",
                 capture_output=True, env=self.env, timeout=120,
             )
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("GitHub request timed out; its completion is unknown") from None
+            raise ui.SetupError("GitHub request timed out; its completion is unknown") from None
         if result.returncode:
             # Never echo subprocess output: a secret upload error could contain input.
-            raise RuntimeError(
+            raise ui.SetupError(
                 f"GitHub command failed (exit {result.returncode}). "
                 "Check connectivity, gh auth status, and repository/token permissions."
             )
@@ -47,18 +52,11 @@ class GitHub:
 
 
 def hidden(prompt):
-    # getpass otherwise falls back to echoing input on unsupported terminals.
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", getpass.GetPassWarning)
-        try:
-            return getpass.getpass(prompt).strip()
-        except getpass.GetPassWarning:
-            raise RuntimeError("Use a real terminal that supports hidden input") from None
+    return ui.hidden(prompt)
 
 
 def ask(label, default=""):
-    suffix = f" [{default}]" if default else ""
-    return input(f"{label}{suffix}: ").strip() or default
+    return ui.ask(label, default)
 
 
 def authenticate(client):
@@ -66,17 +64,17 @@ def authenticate(client):
     try:
         return client.run("api", "user", "--jq", ".login").strip()
     except RuntimeError:
-        raise RuntimeError("Sign in first with: gh auth login --hostname github.com --web\n"
+        raise ui.SetupError("Sign in first with: gh auth login --hostname github.com --web\n"
                            "Or rerun this wizard with --token-auth for a private PAT prompt.") from None
 
 
 def confirm(repo, values, replacing):
-    print(f"\nRepository: {repo}\nEnvironment: {ENVIRONMENT}")
+    ui.say(f"\nRepository: {repo}\nEnvironment: {ENVIRONMENT}")
     for name, value in values.items():
-        print(f"  {name} = {value}")
-    print(f"  {SECRET}: {'set/replace (hidden)' if replacing else 'keep existing'}")
-    print("Existing variables with these names will be updated; other settings are preserved.")
-    return input("Save these settings to GitHub? Type yes: ").strip().lower() == "yes"
+        ui.say(f"  {name} = {value}")
+    ui.say(f"  {SECRET}: {'set/replace (hidden)' if replacing else 'keep existing'}")
+    ui.say("Existing variables with these names will be updated; other settings are preserved.")
+    return ask("Save these settings to GitHub? yes/no", "no").lower() == "yes"
 
 
 def save(client, repo, values, token, existing):
@@ -103,22 +101,25 @@ def save(client, repo, values, token, existing):
                                        "--env", ENVIRONMENT, "--json", "name,value"))
         actual = {item["name"]: item["value"] for item in actual}
         if any(actual.get(name) != value for name, value in values.items()):
-            raise RuntimeError("Variable verification did not match requested settings")
+            raise ui.SetupError("Variable verification did not match requested settings")
         secrets = json.loads(client.run("secret", "list", "--repo", repo,
                                         "--env", ENVIRONMENT, "--json", "name"))
         if SECRET not in {item["name"] for item in secrets}:
-            raise RuntimeError("Secret metadata verification failed")
+            raise ui.SetupError("Secret metadata verification failed")
     except (RuntimeError, ValueError, KeyError) as exc:
         done = ", ".join(completed) or "none confirmed"
-        raise RuntimeError(
+        raise ui.SetupError(
             f"Setup stopped during {current}. Completed: {done}. "
             "Changes are not rolled back; the current operation may also have completed. "
-            "Fix access/connectivity and rerun. " + str(exc)
+            "Fix access/connectivity and rerun. " + (str(exc) if isinstance(exc, ui.SafeError) else 'Unexpected response; details withheld to protect credentials.')
         ) from None
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--plain", action="store_true", help="Use basic terminal prompts instead of Textual")
+    parser.add_argument("--tokens-file", type=Path, default=DEFAULT_PATH,
+                        help="Encrypted token file (default: .local/tokens.gpg in this repository)")
     parser.add_argument("--repo", help=f"GitHub owner/repo (default prompt: {DEFAULT_REPO})")
     parser.add_argument("--token-auth", action="store_true",
                         help="Privately prompt for a GitHub PAT instead of using gh's saved login")
@@ -130,27 +131,40 @@ def main():
     if args.saved_login and args.token_auth:
         parser.error("--saved-login and --token-auth cannot be combined")
     if not sys.stdin.isatty():
-        raise RuntimeError("Run this wizard interactively in a terminal, without redirected input")
+        raise ui.SetupError("Run this wizard interactively in a terminal, without redirected input")
+    if args.plain:
+        execute(args)
+        return 0
+    steps = ["tokens", "github", "review", "save"] if args.github_only else None
+    return ui.run(lambda: execute(args), steps=steps)
+
+
+def execute(args):
+    ui.stage("tokens")
+    args.tokens = load_tokens(args.tokens_file, ask, hidden, ui.say)
+    ui.stage("github")
     if not args.github_only:
         from setup_cloud import run
         run(args)
         return
     executable = shutil.which("gh")
     if not executable:
-        raise RuntimeError("Install GitHub CLI from https://cli.github.com/ and reopen your terminal")
+        raise ui.SetupError("Install GitHub CLI from https://cli.github.com/ and reopen your terminal")
     repo = args.repo or ask("GitHub repository", DEFAULT_REPO)
     if not re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+", repo):
-        raise ValueError("Repository must use owner/repo format on github.com")
-    github_token = hidden("GitHub access token (hidden): ") if args.token_auth else None
+        raise ui.InputError("Repository must use owner/repo format on github.com")
+    github_token = None if args.saved_login else args.tokens.get("github")
+    if not github_token and args.token_auth:
+        github_token = hidden("GitHub access token (hidden): ")
     if args.token_auth and not github_token:
-        raise ValueError("A GitHub token is required with --token-auth")
+        raise ui.InputError("A GitHub token is required with --token-auth")
     client = GitHub(executable, github_token)
     identity = authenticate(client)
     repository = json.loads(client.run("api", f"repos/{repo}"))
     if not repository.get("permissions", {}).get("admin"):
-        raise RuntimeError("An account with repository administrator access is required")
+        raise ui.SetupError("An account with repository administrator access is required")
     repo = repository["full_name"]
-    print(f"Signed in as {identity}. Configuring {repo} / {ENVIRONMENT}.")
+    ui.say(f"Signed in as {identity}. Configuring {repo} / {ENVIRONMENT}.")
     names = client.run("api", f"repos/{repo}/environments", "--paginate",
                        "--jq", ".environments[].name").splitlines()
     # Environment names are case insensitive; never PUT an already existing one.
@@ -170,30 +184,32 @@ def main():
         "DO_CERTIFICATE_NAME": (ask("DO certificate name", defaults.get("DO_CERTIFICATE_NAME", ""))
                                 if mode == "digitalocean" else ""),
     })
+    ui.stage("review")
     suffix = " (Enter keeps existing)" if secret_exists else " (required)"
-    token = hidden(f"DigitalOcean API token{suffix}: ")
+    token = args.tokens.get("digitalocean") or hidden(f"DigitalOcean API token{suffix}: ")
     if not token and not secret_exists:
-        raise ValueError("A DigitalOcean token is required for a new setup")
+        raise ui.InputError("A DigitalOcean token is required for a new setup")
     if any(char.isspace() or ord(char) < 32 for char in token):
-        raise ValueError("The token must be a single value without whitespace")
+        raise ui.InputError("The token must be a single value without whitespace")
     if not confirm(repo, values, replacing=bool(token)):
-        print("Cancelled. No settings were changed.")
+        ui.cancelled("Cancelled. No settings were changed.")
         return
+    ui.stage("save")
     save(client, repo, values, token, existing)
-    print("\nSetup complete. Variables verified and secret metadata found.")
-    print("Secret contents cannot be read back; DigitalOcean authentication was not tested.")
-    print(f"Environment: https://github.com/{repo}/settings/environments")
-    print("Once the deployment workflow is merged: Actions > Deploy Reposilite > Run workflow > main")
-    print("No cluster was created and no deployment was triggered.")
+    ui.say("\nSetup complete. Variables verified and secret metadata found.")
+    ui.say("Secret contents cannot be read back; DigitalOcean authentication was not tested.")
+    ui.say(f"Environment: https://github.com/{repo}/settings/environments")
+    ui.say("Once the deployment workflow is merged: Actions > Deploy Reposilite > Run workflow > main")
+    ui.say("No cluster was created and no deployment was triggered.")
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except (RuntimeError, ValueError, OSError) as exc:
-        print(f"Setup failed: {exc}", file=sys.stderr)
+        ui.say(f"Setup failed: {exc}", file=sys.stderr)
         sys.exit(1)
     except (KeyboardInterrupt, EOFError):
-        print("\nInterrupted. If saving had started, some settings may have changed; rerun to verify.",
+        ui.say("\nInterrupted. If saving had started, some settings may have changed; rerun to verify.",
               file=sys.stderr)
         sys.exit(130)

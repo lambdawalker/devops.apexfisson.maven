@@ -10,3 +10,6 @@ backups/
 .venv/
 .pulumi/
 infrastructure/Pulumi.*.yaml
+
+# Local encrypted credentials (custom token-store paths included)
+*.gpg

@@ -198,7 +198,7 @@ class ProvisionTests(unittest.TestCase):
                 patch.object(self.wizard, 'token', side_effect=['gh-secret', 'do-secret', 'cf-secret']), \
                 patch.object(self.wizard, 'DigitalOcean') as digitalocean, \
                 patch.object(self.wizard, 'Cloudflare'), \
-                patch.object(self.wizard, 'ask', return_value='project-id'), \
+                patch.object(self.wizard, 'ask', side_effect=lambda label, default='': 'yes' if 'Cloudflare?' in label else 'project-id'), \
                 patch.object(self.wizard, 'prepare', return_value=(Mock(env={}), None)), \
                 patch.object(self.wizard, 'collect', return_value=self.plan), \
                 patch.object(self.wizard, 'review', return_value=False), \

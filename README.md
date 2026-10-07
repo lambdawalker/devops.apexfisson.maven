@@ -32,6 +32,9 @@ Retain reduces accidental volume deletion; it does **not** provide backups.
 5. **[GitHub deployment](docs/github-deployment.md)**: environment settings and the
    manual **Deploy Reposilite** workflow.
 
+Optionally run `uv run python scripts/save_tokens.py` first to save encrypted local
+tokens; setup will ask for the passphrase. See the [wizard guide](docs/setup-wizard.md).
+
 The setup wizard uses uv to manage Python 3.13+ and SDKs, plus GitHub CLI and Pulumi CLI. It needs
 GitHub, DigitalOcean and Cloudflare access tokens and an active Cloudflare zone. Start with [Pulumi setup](docs/pulumi.md) for
 installation, state storage and importing existing infrastructure. Run
@@ -57,7 +60,8 @@ application highly available. Do not scale Reposilite beyond one replica.
 | `.github/workflows/validate.yml` | Credential-free validation |
 | `.github/workflows/deploy.yml` | Manual deployment to the existing DOKS cluster |
 | `infrastructure/` | Pulumi cluster, project assignment, gateway/TLS and Cloudflare DNS |
-| `scripts/setup_environment.py` | Cross-platform DigitalOcean and GitHub setup wizard |
+| `scripts/setup_environment.py` | Textual wizard with steps, progress and plain-terminal fallback |
+| `scripts/save_tokens.py` | Save local tokens encrypted with a GPG passphrase |
 | `docs/design.md` | Architecture and tradeoffs |
 
 ## References
