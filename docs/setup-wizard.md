@@ -45,6 +45,8 @@ the GitHub-only mode remains available for existing infrastructure.
 Install GnuPG 2.2+ and ensure `gpg --version` works in the same terminal:
 [Gpg4win](https://www.gpg4win.org/) on Windows, or your Linux distribution's
 `gnupg` package (for example, `sudo apt install gnupg` on Ubuntu/Debian).
+On Windows, use native Gpg4win and place its GnuPG `bin` directory before any
+Git/MSYS GPG directory in PATH; the MSYS build uses Unix-style paths.
 See the [GnuPG downloads](https://www.gnupg.org/download/) page.
 
 ```text
