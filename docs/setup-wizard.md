@@ -22,12 +22,29 @@ follow its browser/token prompts. `--saved-login` reuses your GitHub CLI login;
 ## Guided interface
 
 The default Textual interface shows the ordered steps, their status, a progress bar,
-elapsed time for the active step, and a scrollable activity log. Progress counts
+elapsed time for the active step, and a scrollable **Output · stdout / stderr** panel.
+Wizard messages and noninteractive GitHub/Pulumi command output stream into this
+panel as complete lines arrive, including diagnostics on failed commands. Progress counts
 completed steps; it does not estimate DigitalOcean deployment progress.
 Pulumi login temporarily returns to the normal terminal, then the interface resumes.
 Press Ctrl+C to request cancellation; an in-flight operation finishes before the
 wizard stops, and already-created resources are retained. Press Enter or Q to
 close the final result.
+
+Every run saves a UTF-8 debugging log at `.local/logs/setup-<UTC timestamp>-<unique id>.log`.
+The path is displayed at startup and when the log is retained. Logs include setup
+stages, command output, exit codes, durations and safe failure details; each write
+is flushed to disk. `.local/` is ignored by Git. On success, the wizard asks
+**“Delete the debugging log?”** with a default of **no**. Failed, cancelled or
+interrupted runs retain their logs automatically. This also works with `--plain`.
+
+Known tokens/passphrases and common credential fields are redacted before display
+and logging. Decrypted GPG data, Pulumi state/configuration/stack-output payloads,
+and resource properties in preview JSON are withheld. Preview diagnostic messages
+are streamed, and the existing reviewed change summary is still shown. Interactive
+Pulumi login stays on the real terminal and is not recorded, to keep its hidden
+credential prompts private. Review a log before sharing it: it can contain resource
+names, account identifiers and provider diagnostics.
 
 Use basic terminal prompts on either Windows or Linux if preferred:
 

@@ -36,14 +36,14 @@ class GitHub:
     def run(self, *args, stdin=None):
         ui.check_cancelled()
         try:
-            result = subprocess.run(
+            result = ui.run_command(
                 [self.executable, *args], input=stdin, text=True, encoding="utf-8",
                 capture_output=True, env=self.env, timeout=120,
             )
         except subprocess.TimeoutExpired as exc:
             raise ui.SetupError("GitHub request timed out; its completion is unknown") from None
         if result.returncode:
-            # Never echo subprocess output: a secret upload error could contain input.
+            # The command boundary redacts input and tokens before streaming diagnostics.
             raise ui.SetupError(
                 f"GitHub command failed (exit {result.returncode}). "
                 "Check connectivity, gh auth status, and repository/token permissions."
@@ -133,15 +133,16 @@ def main():
     if not sys.stdin.isatty():
         raise ui.SetupError("Run this wizard interactively in a terminal, without redirected input")
     if args.plain:
-        execute(args)
+        ui.logged(lambda: execute(args))
         return 0
     steps = ["tokens", "github", "review", "save"] if args.github_only else None
-    return ui.run(lambda: execute(args), steps=steps)
+    return ui.run(lambda: ui.logged(lambda: execute(args)), steps=steps)
 
 
 def execute(args):
     ui.stage("tokens")
     args.tokens = load_tokens(args.tokens_file, ask, hidden, ui.say)
+    ui.register_secrets(args.tokens.values())
     ui.stage("github")
     if not args.github_only:
         from setup_cloud import run
@@ -207,7 +208,8 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except (RuntimeError, ValueError, OSError) as exc:
-        ui.say(f"Setup failed: {exc}", file=sys.stderr)
+        detail = str(exc) if isinstance(exc, ui.SafeError) else type(exc).__name__
+        ui.say(f"Setup failed: {detail}", file=sys.stderr)
         sys.exit(1)
     except (KeyboardInterrupt, EOFError):
         ui.say("\nInterrupted. If saving had started, some settings may have changed; rerun to verify.",
