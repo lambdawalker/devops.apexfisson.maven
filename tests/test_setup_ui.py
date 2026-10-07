@@ -55,6 +55,45 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             await pilot.press('enter')
         self.assertIsInstance(ui._backend, ui.PlainBackend)
 
+    async def test_logged_stdout_panel_and_delete_prompt(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from textual.widgets import Input, RichLog
+        with TemporaryDirectory() as tmp:
+            def flow():
+                print('Live stdout in panel')
+                ui.say('Wizard status')
+            app = ui.create_app(lambda: ui.logged(flow, directory=Path(tmp)))
+            async with app.run_test() as pilot:
+                await self.wait_for(pilot, lambda: bool(app.screen.query(Input)))
+                self.assertIn('Delete the debugging log?', app.prompt_screen.label)
+                self.assertEqual(app.screen.query_one(Input).value, 'no')
+                app.screen.query_one(Input).value = 'yes'
+                await pilot.press('enter')
+                await self.wait_for(pilot, lambda: app.done)
+                output = '\n'.join(str(line) for line in app.query_one(RichLog).lines)
+                self.assertIn('Live stdout in panel', output)
+                self.assertIn('Debug log deleted.', output)
+                self.assertEqual(app.result_code, 0)
+            self.assertEqual(list(Path(tmp).glob('*.log')), [])
+
+    async def test_logged_failure_retains_diagnostic(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as tmp:
+            def flow():
+                ui.stage('pulumi')
+                print('Diagnostic before failure')
+                raise ui.SetupError('Pulumi failed')
+            app = ui.create_app(lambda: ui.logged(flow, directory=Path(tmp)))
+            async with app.run_test() as pilot:
+                await self.wait_for(pilot, lambda: app.done)
+                self.assertEqual(app.result_code, 1)
+                self.assertIsNone(app.prompt_screen)
+            text = next(Path(tmp).glob('*.log')).read_text()
+            self.assertIn('Diagnostic before failure', text)
+            self.assertIn('Pulumi failed', text)
+
     async def test_cancel_pending_input(self):
         proceeded = []
         def flow():

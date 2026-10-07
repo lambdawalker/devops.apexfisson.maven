@@ -50,7 +50,8 @@ local configuration; failed applies may retain partially created resources.
 
 If an update fails, open the selected stack in Pulumi Cloud and inspect the latest
 update's diagnostics. The script identifies the failed CLI operation and offers
-safe diagnostic guidance; raw provider output is withheld because it can contain
+redacted diagnostics in the output panel and `.local/logs/` debugging log.
+Sensitive state/configuration output is withheld because it can contain
 credentials. Do not delete state or change stack names to get around an error.
 
 On reruns, declared cluster settings and import policy are retained. A managed

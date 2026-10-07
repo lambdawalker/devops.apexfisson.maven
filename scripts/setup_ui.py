@@ -60,25 +60,45 @@ class PlainBackend:
 
 
 _backend = PlainBackend()
+_transcript = None
 
 
 def check_cancelled():
     return _backend.check()
 
 
+def _prompt(callback, *args):
+    # Plain input/getpass prompts have no newline and must reach the terminal
+    # immediately. Never capture entered values or hidden-input prompts.
+    if _transcript is None:
+        return callback(*args)
+    previous = _transcript.forwarding
+    _transcript.forwarding = True
+    try:
+        return callback(*args)
+    finally:
+        _transcript.forwarding = previous
+
+
 def ask(label, default=''):
-    return _backend.ask(label, default)
+    return _prompt(_backend.ask, label, default)
 
 
 def hidden(prompt):
-    return _backend.hidden(prompt)
+    value = _prompt(_backend.hidden, prompt)
+    register_secrets([value])
+    return value
 
 
 def say(*objects, sep=' ', end='\n', flush=False, file=None):
+    if _transcript is not None:
+        return _transcript.emit(sep.join(str(o) for o in objects) + end)
     return _backend.say(*objects, sep=sep, end=end, flush=flush, file=file)
 
 
 def stage(key):
+    if _transcript is not None:
+        _transcript.emit(f'\n--- {key.title()} ---\n')
     return _backend.stage(key)
 
 
@@ -87,11 +107,32 @@ def skip(key):
 
 
 def cancelled(message):
+    if _transcript is not None:
+        _transcript.cancelled = True
+        _transcript.emit(message + '\n')
+        return _backend.cancelled('Setup cancelled.')
     return _backend.cancelled(message)
 
 
 def terminal(callback):
     return _backend.terminal(callback)
+
+
+def register_secrets(values):
+    if _transcript is not None:
+        _transcript.register(values)
+
+
+def logged(callback, **kwargs):
+    import sys
+    import setup_output
+    return setup_output.logged(callback, sys.modules[__name__], **kwargs)
+
+
+def run_command(command, **kwargs):
+    import sys
+    import setup_output
+    return setup_output.run_command(command, sys.modules[__name__], **kwargs)
 
 
 def create_app(callback, steps=None):
@@ -181,6 +222,7 @@ def create_app(callback, steps=None):
             yield Footer()
 
         def on_mount(self):
+            self.query_one('#output', RichLog).border_title = 'Output · stdout / stderr'
             self.refresh_steps()
             self.set_interval(0.2, self.activity)
             self.worker = self.run_worker(self.execute, thread=True, exit_on_error=False)
@@ -224,7 +266,6 @@ def create_app(callback, steps=None):
             self.call_from_thread(update)
 
         def say(self, *objects, sep=' ', end='\n', **kwargs):
-            self.check()
             value = sep.join(str(o) for o in objects) + end
             self.call_from_thread(lambda: self.query_one('#output', RichLog).write(value.rstrip('\n')))
 

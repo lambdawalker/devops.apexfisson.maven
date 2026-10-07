@@ -140,12 +140,14 @@ class Pulumi:
         if self.config_file and args[0] in ('config', 'preview', 'up'):
             command += ['--config-file', str(self.config_file)]
         try:
-            result = subprocess.run(command, cwd=ROOT / 'infrastructure', env=self.env,
+            result = ui.run_command(command, cwd=ROOT / 'infrastructure', env=self.env,
+                                    private_stdout=(args[:2] in (('stack', 'export'), ('stack', 'output')) or args[0] == 'config'),
+                                    preview_json=(args[0] == 'preview' and '--json' in args),
                                     text=True, encoding='utf-8', capture_output=True, timeout=2700)
         except subprocess.TimeoutExpired:
             raise ui.SetupError('Pulumi timed out; inspect the stack for an interrupted update before rerunning') from None
         if result.returncode:
-            # Provider diagnostics can contain tokens/config/kubeconfig: never echo them.
+            # The command boundary streams redacted diagnostics; keep this exception safe.
             raise ui.SetupError(f'Pulumi {" ".join(args[:2]) if args[0] in ("stack", "org", "config") else args[0]} failed (exit {result.returncode}). '
                                'Check Pulumi login, backend access, token scopes and stack update history. '
                                'Existing resources/state were retained; no rollback was attempted. ' +
