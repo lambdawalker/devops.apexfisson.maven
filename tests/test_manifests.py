@@ -26,7 +26,7 @@ class DeploymentSafety(unittest.TestCase):
         self.assertNotIn("externalIPs", service["spec"])
 
     def test_single_writer_and_retained_persistent_data_in_both_targets(self):
-        for target in ["k8s/base", "k8s/overlays/production"]:
+        for target in ["k8s/base", "k8s/overlays/production", "k8s/overlays/cloudflare"]:
             with self.subTest(target=target):
                 docs = render(target)
                 dep = next(d for d in docs if d["kind"] == "Deployment")

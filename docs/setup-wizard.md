@@ -1,171 +1,121 @@
-# Set up DigitalOcean and GitHub from Windows or Linux
+# Set up DigitalOcean, Cloudflare and GitHub
 
-The Python wizard creates or reuses your DigitalOcean Kubernetes cluster and TLS
-certificate, then configures the GitHub `production` environment. DigitalOcean
-assigns the cluster UUID; the wizard reads it from the API and saves it as
-`DOKS_CLUSTER_ID`. You do not choose or copy the UUID.
+Keep your domain and nameservers at Cloudflare. The Python wizard provisions a
+DOKS cluster, a Traefik HTTPS gateway, cert-manager with Cloudflare DNS verification,
+and a DNS-only A record. It then configures GitHub's `production` environment.
+Reposilite stays private until you finish administrator bootstrap and dispatch the
+application deployment workflow.
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/),
 [GitHub CLI](https://cli.github.com/), and [Pulumi CLI](https://www.pulumi.com/docs/install/).
-Clone/download the whole repository. uv manages Python 3.13+ and the pinned project
-dependencies. PowerShell, manual venv activation, pip, doctl and kubectl are not
-needed to run this wizard.
-
-## Run
-
-From the repository root on **Windows or Linux**:
+From the repository root on Windows or Linux:
 
 ```text
 uv run python scripts/setup_environment.py
 ```
 
-The wizard asks for your Pulumi backend and runs `pulumi login` interactively before
-selecting a stack. Follow its browser/token prompts; you do not need to log in
-separately. See [Pulumi setup](pulumi.md) for state and import details.
+uv supplies Python 3.13+ and the pinned SDKs. No PowerShell scripts or manual
+virtual-environment activation are needed. Pulumi login runs interactively;
+follow its browser/token prompts. `--saved-login` reuses your GitHub CLI login;
+`--repo OWNER/REPO` selects another repository.
 
-The default flow privately prompts for a GitHub token and a DigitalOcean token.
-Neither token has a default; blank input is rejected. You can instead reuse your
-saved GitHub CLI login:
+## Prompts and defaults
 
-```text
-gh auth login --hostname github.com --web
-uv run python scripts/setup_environment.py --saved-login
-```
+Tokens have no default and use hidden input. Other prompts offer discovered or
+saved defaults. Saved stack configuration takes precedence on reruns.
 
-The optional `--repo OWNER/REPO` flag selects a fork. `--token-auth` is still
-accepted; in the unified flow prompting for a token is already the default.
-
-## Defaults
-
-Press Enter to accept a configuration default. Tokens are always hidden and
-never included in the preview. Existing Pulumi stack configuration takes priority on reruns, then GitHub values.
-
-| Setting | Default |
+| Setting | First-run default |
 | --- | --- |
 | GitHub repository | `lambdawalker/devops.apexfisson.maven` |
-| Pulumi backend | Pulumi Cloud, or `PULUMI_BACKEND_URL` when set |
-| Pulumi stack | `<Pulumi account>/apexfission-maven/production` (DIY: `production`) |
-| GitHub environment | Fixed `production`, matching the workflow |
-| Cluster name | Existing GitHub cluster's name, otherwise `apexfission-maven` |
-| Region for new cluster | `nyc1`, or first supported region if unavailable |
-| Worker size | `s-2vcpu-4gb` (2 vCPU / 4 GiB); validated against current API options |
-| Worker count | `1` |
-| Kubernetes version | Highest stable version currently offered by the DO API |
-| Maven hostname | Existing GitHub value, otherwise `maven.` plus first DO domain alphabetically |
-| Certificate name | Existing GitHub value, otherwise `<cluster-name>-tls` |
-| DNS zone for new certificate | Longest existing matching zone, otherwise hostname without first label |
-| Confirm changes | `no` |
+| Pulumi backend | `https://api.pulumi.com`, or `PULUMI_BACKEND_URL` |
+| Pulumi organization | Configured default if accessible, otherwise a discovered organization |
+| Pulumi stack | `<organization>/apexfission-maven/production`; DIY backend: `production` |
+| DigitalOcean project | The account's default project |
+| Cluster | `apexfission-maven` |
+| Region / worker / count | `nyc1` / `s-2vcpu-4gb` / `1` |
+| Kubernetes version | Highest stable version offered by the DO API |
+| Cloudflare zone | A zone accessible to the supplied token |
+| Hostname | `maven.<zone>`, or saved hostname |
+| ACME email | Suggested address on the chosen domain; enter an address you monitor |
+| Confirmation | `no` |
 
-If there are no existing domains, the hostname prompt suggests
-`maven.your-domain.com`. You must replace that placeholder with a hostname you
-own. Review the DNS zone default, especially for apex hostnames and domains such
-as `example.co.uk`; the script does not infer domain ownership or buy a domain.
-Region, worker and version prompts appear only when creating a cluster. Existing
-clusters are imported with configuration preservation enabled; established Pulumi
-stacks retain their declared configuration on reruns. Cluster names must be unique in the
-DO account; ambiguous matches stop setup.
+Your Pulumi username and organization need not match. For example, login
+`lambdawalker` can own the stack through organization `isdavid`. The wizard no
+longer constructs an organization from the username.
 
-New clusters have control-plane HA disabled, automatic and surge upgrades enabled,
-and maintenance Saturday at 06:00 UTC. One worker accepts downtime; it is not HA.
-Surge upgrades can temporarily add workers. The wizard prints the node count/size
-and [pricing link](https://docs.digitalocean.com/products/kubernetes/details/pricing/)
-before confirmation. **Workers are billable and continue running after setup.**
-Subsequent application deployment adds separately billable storage and a load balancer.
+Select an existing DigitalOcean project by the displayed name or ID. The project
+selection is saved with the stack; changing your account's default later does not
+silently move an established setup. The cluster is assigned through Pulumi.
+DOKS-associated resources, especially PVC volumes created later by Kubernetes,
+can still start in the account's default project. Inspect their placement in the
+DO console; cluster assignment does not imply all related resources move.
 
-## Access tokens
+## Tokens
 
-Use an administrator account on the existing GitHub repository. For a fine-grained
-GitHub PAT, select this repository with **Administration: read/write** and
-**Environments: read/write**. Honor any organization approval/SSO requirements.
-The script does not create the repository. See GitHub's API permission references
-for [environments](https://docs.github.com/en/rest/deployments/environments),
-[environment secrets](https://docs.github.com/en/rest/actions/secrets), and
-[environment variables](https://docs.github.com/en/rest/actions/variables).
+- **GitHub:** repository administrator access. A fine-grained token needs this
+  repository's Administration and Environments read/write permissions, with any
+  required organization approval. Only the DigitalOcean deployment token is saved
+  as a GitHub secret; GitHub's token stays in process memory.
+- **DigitalOcean:** Kubernetes read/create/update/access-cluster, projects read
+  and assign-resource, load-balancer read, plus required dependent scopes shown
+  by the token editor (such as regions, sizes and actions read). Existing legacy
+  state can also require domain/certificate read. The default flow saves this DO
+  token in GitHub; replace it with a deployment-only token afterward if desired.
+  Kubernetes controllers create the gateway load balancer and later PVC volume.
+- **Cloudflare:** create a scoped API token with **Zone:DNS:Edit** and
+  **Zone:Zone:Read**, restricted to **apexfission.com** (or your selected zone).
+  Do not use the Global API Key. It supports Pulumi's DNS record and cert-manager's
+  temporary DNS challenge records. The zone must already exist and be active.
+- **Pulumi:** login uses Pulumi's normal local credential storage. No Pulumi token
+  needs to be added to the application deployment workflow.
 
-Create a DigitalOcean token for the team that will own the resources. For custom
-scopes, enable:
+The Cloudflare token is passed to Pulumi via its environment and stored as a
+Kubernetes Secret for renewal, encrypted as a secret in Pulumi state. It is not
+written to stack configuration, exported, printed in preview or saved to GitHub.
+Cluster administrators and Pulumi state decryptors are privileged: they can access
+these credentials. A token rotation requires rerunning setup so cert-manager gets
+the new token. See [Cloudflare DNS verification](https://cert-manager.io/docs/configuration/acme/dns01/cloudflare/).
 
-- `kubernetes:read`, `kubernetes:create`, `kubernetes:update`, and `kubernetes:access_cluster` (the last
-  is needed by the deployment workflow).
-- `certificate:read` and `certificate:create` for TLS.
-- `domain:read`, `domain:create`, and `domain:update` for DNS and managed issuance.
-- All required dependent scopes the DO token editor lists for these permissions,
-  including `regions:read`, `sizes:read`, and `actions:read` where required.
+## Review and billing
 
-Consult the current [DO scope reference](https://docs.digitalocean.com/reference/api/scopes/),
-particularly [Kubernetes creation](https://docs.digitalocean.com/reference/api/scopes/kubernetes/create/),
-[cluster credentials](https://docs.digitalocean.com/reference/api/scopes/kubernetes/access_cluster/),
-and [certificates](https://docs.digitalocean.com/reference/api/scopes/certificate/create/).
-The wizard tests DO access by reading resource inventories, but does not test
-kubeconfig access; the deployment workflow checks that when run. You can later
-replace the GitHub DO secret with a deployment-only token using the GitHub-only
-mode below. The default flow stores the supplied DO token in GitHub.
+Review the desired configuration and Pulumi preview; type `yes` to apply. Deletion
+and replacement operations are refused. New resources are protected. Setup creates
+**billable workers and a load balancer**, even before Reposilite is deployed.
+Private application deployment later adds a billable persistent volume. One worker
+accepts downtime; extra gateway/certificate controllers also consume node capacity.
+Automatic and surge upgrades are enabled; surge can add temporary billable workers.
 
-GitHub tokens stay in process memory and the `gh` child-process environment; they
-are not saved by this script. DO tokens go to the DO API in HTTPS headers and to
-`gh secret set` through stdin, where GitHub CLI encrypts the upload. No tokens
-are written to files, echoed, or passed in command-line arguments. Saved `gh`
-login credentials retain the CLI's normal persistence behavior. Run in a real
-terminal that supports hidden input, with no redirected stdin.
+The DNS A record uses the gateway's actual load-balancer address and is DNS-only
+(`proxied=false`). Nameservers and unrelated records stay at Cloudflare. Conflicting
+hostname records stop setup. An A record not already owned by this stack also
+stops setup: use an unused hostname or plan a separate DNS migration first.
+The wizard never replaces an unrelated existing record.
+Do not put credentials in command arguments, checked-in files or chat.
 
-## DNS and certificates
+## Continue after setup
 
-For a new certificate, the wizard creates the DO DNS zone if missing and requests
-a Let's Encrypt certificate for the hostname. Your registrar or parent DNS zone
-must delegate the zone to `ns1.digitalocean.com`, `ns2.digitalocean.com`, and
-`ns3.digitalocean.com`. **Copy any existing DNS records before changing nameservers**;
-the wizard does not migrate records. Delegation changes are outside the script.
-Prepare delegation before running, or rerun after it propagates. Adding a zone in
-DO alone does not transfer DNS authority.
+1. Follow [setup](setup.md) steps 1 (connect only), 2 and 3: install the private
+   application, create a permanent administrator, remove bootstrap and verify login.
+2. Dispatch **Deploy Reposilite** on `main`. It adds the hostname route, requests
+   its certificate through cert-manager and waits for readiness.
+3. Verify HTTPS, HTTP redirect, dashboard Console, upload and download externally.
 
-An existing certificate with the chosen name is reused only if it covers the
-hostname and, when issued, has not expired. This also supports a previously
-imported certificate when its DNS-name metadata is available. External DNS users
-can import their own certificate in DO beforehand and choose its name, without
-creating a new DO zone. Renewal of imported certificates remains your responsibility.
+The gateway may answer 404 before step 2; it has no Reposilite route then. DNS is
+already managed by Pulumi; do not create another A record manually.
 
-Certificate readiness is checked **before creating a cluster**. Pulumi manages
-provisioning, with an explicit dependency from the cluster to the certificate.
-Existing certificates must already be verified before import. Pulumi's provider
-handles readiness and API retries; interrupted operations may leave state/resources.
+## Reruns and failed legacy setup
 
-## Changes, reruns and remaining steps
+Always reuse the same backend and stack. See [Pulumi setup](pulumi.md) for migration,
+state protection, import and diagnostics. Existing GitHub environment protection
+rules are preserved. Partial updates are retained; no rollback is attempted.
 
-The wizard prepares a Pulumi preview, displays nonsecret desired configuration and
-resource operations, then requires `yes` before applying the saved plan. It refuses
-deletes/replacements and protects owned resources. Afterwards it saves the generated
-UUID, hostname, certificate name and DO token in GitHub `production`, preserving
-existing environment protections. GitHub secret contents cannot be read back; only
-metadata is verified.
-
-Use the same backend and stack on every rerun. Imported resources start in a
-preservation mode; newly created resources can be updated through Pulumi config.
-State/config recovery, ownership checks, import IDs, encrypted state and deliberate
-updates are explained in [Pulumi infrastructure](pulumi.md). Do not run concurrent
-wizards or manage the same resource from multiple stacks. No rollback is attempted
-on failure; inspect the stack and GitHub settings before rerunning.
-
-**The wizard prepares infrastructure; it does not expose an uninitialized Maven
-repository.** Continue with [setup.md](setup.md): connect to the created cluster
-using doctl/kubectl, then complete steps 2–3 to install the private base and create
-a persistent Reposilite administrator. Those shell examples use Bash/WSL. Then
-run [Deploy Reposilite](github-deployment.md), create the hostname A record pointing
-to its load balancer IP, and verify HTTPS/login.
-
-## GitHub-only mode
-
-For infrastructure you prepared separately, the previous workflow is available:
+For GitHub settings only, run:
 
 ```text
 uv run python scripts/setup_environment.py --github-only
 ```
 
-This mode uses saved `gh` login by default; add `--token-auth` for a hidden PAT
-prompt. It asks for the existing cluster UUID, hostname, and certificate name.
-Defaults are taken from the existing GitHub environment (on first use these values
-must be supplied). A blank DO token preserves the existing GitHub secret. It makes
-no DO API calls and cannot verify DO authentication. Use the default unified mode
-for first-time provisioning with automatically generated UUIDs and suggested defaults.
-
-Automated tests fake external API/CLI calls and run on Windows and Linux. Live
-resource creation only happens when you run the wizard and confirm its plan.
+Choose `cloudflare` TLS mode for this architecture, or `digitalocean` for the
+legacy load-balancer certificate overlay. This mode uses saved `gh` login by
+default; `--token-auth` requests a PAT. A blank DO token keeps the existing secret.
+It does not provision or validate infrastructure.

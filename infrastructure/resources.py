@@ -1,4 +1,4 @@
-"""DigitalOcean infrastructure only; Kubernetes application objects have another owner."""
+"""Cluster infrastructure and edge integration; application objects have another owner."""
 import pulumi
 import pulumi_digitalocean as do
 
@@ -19,8 +19,11 @@ def options(spec, dependencies=None, credentials=False):
 def build(spec):
     domain_spec = spec.get('domain')
     domain = do.Domain('domain', name=domain_spec['name'], opts=options(domain_spec)) if domain_spec else None
-    cert_spec = spec['certificate']
-    if cert_spec['mode'] == 'external':
+    cert_spec = spec.get('certificate')
+    certificate = None
+    if not cert_spec:
+        pass
+    elif cert_spec['mode'] == 'external':
         certificate = do.Certificate.get('certificate', cert_spec['name'])
     else:
         certificate = do.Certificate(
@@ -39,7 +42,13 @@ def build(spec):
         vpc_uuid=props.get('vpcUuid'),
         maintenance_policy=do.KubernetesClusterMaintenancePolicyArgs(day='saturday', start_time='06:00'),
         destroy_all_associated_resources=False, kubeconfig_expire_seconds=1800,
-        opts=options(cluster_spec, [certificate], credentials=True),
+        opts=options(cluster_spec, [certificate] if certificate else None, credentials=True),
     )
+    if spec.get('projectId'):
+        do.ProjectResources('cluster-project', project=spec['projectId'], resources=[cluster.cluster_urn], opts=pulumi.ResourceOptions(protect=True))
+    if spec.get('tlsMode') == 'cloudflare':
+        from edge import build_edge
+        build_edge(spec, cluster)
+        return {'clusterId': cluster.id, 'hostname': spec['hostname'], 'tlsMode': 'cloudflare'}
     # Never export kubeconfig or other credentials. Consumers only need these values.
     return {'clusterId': cluster.id, 'hostname': spec['hostname'], 'certificateName': certificate.name}

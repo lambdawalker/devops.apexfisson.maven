@@ -195,13 +195,16 @@ class ProvisionTests(unittest.TestCase):
         args = Namespace(repo='owner/repo', saved_login=False)
         with patch.object(self.wizard.shutil, 'which', return_value='gh'), \
                 patch.object(self.wizard, 'GitHub', return_value=github), \
-                patch.object(self.wizard, 'token', side_effect=['gh-secret', 'do-secret']), \
-                patch.object(self.wizard, 'DigitalOcean'), \
-                patch.object(self.wizard, 'prepare', return_value=(Mock(), None)), \
+                patch.object(self.wizard, 'token', side_effect=['gh-secret', 'do-secret', 'cf-secret']), \
+                patch.object(self.wizard, 'DigitalOcean') as digitalocean, \
+                patch.object(self.wizard, 'Cloudflare'), \
+                patch.object(self.wizard, 'ask', return_value='project-id'), \
+                patch.object(self.wizard, 'prepare', return_value=(Mock(env={}), None)), \
                 patch.object(self.wizard, 'collect', return_value=self.plan), \
                 patch.object(self.wizard, 'review', return_value=False), \
                 patch.object(self.wizard, 'provision') as provision, \
                 patch('sys.stdout', new_callable=io.StringIO):
+            digitalocean.return_value.list.return_value = [{'id': 'project-id', 'name': 'Default', 'is_default': True}]
             self.wizard.run(args)
         provision.assert_not_called()
         self.assertFalse(any('--method' in c.args for c in github.run.call_args_list))

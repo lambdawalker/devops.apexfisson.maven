@@ -1,4 +1,5 @@
 """Pulumi CLI boundary: nonsecret config, explicit stack, reviewed saved plans."""
+import copy
 import hashlib
 import importlib.util
 import json
@@ -20,13 +21,23 @@ LOCAL = ROOT / '.local' / 'pulumi'
 
 def build_spec(plan, previous=None):
     cluster = plan['cluster'] or plan['cluster_body']
+    cloudflare = plan.get('tlsMode') == 'cloudflare'
     if previous:
         if (previous['cluster']['properties']['name'] != cluster['name']
                 or previous['hostname'] != plan['hostname']
-                or previous['certificate']['name'] != plan['certificate_name']):
+                or (not cloudflare and previous['certificate']['name'] != plan.get('certificate_name'))):
             raise ValueError('Selected resources differ from this Pulumi stack. '
                              'Use its existing names or deliberately edit its configuration first.')
         # Persist declared settings and import policy, not newly observed defaults.
+        if cloudflare:
+            result = copy.deepcopy(previous)
+            result.update(tlsMode='cloudflare', cloudflare=plan['cloudflare'])
+            if plan.get('projectId'):
+                result.update(projectId=plan['projectId'], projectName=plan['projectName'])
+            # A failed certificate absent from provider/state must never be recreated.
+            if not plan.get('certificate'):
+                result['certificate'] = None
+            return result
         return previous
     pool = cluster['node_pools'][0]
     properties = {'name': cluster['name'], 'region': cluster['region'],
@@ -37,16 +48,16 @@ def build_spec(plan, previous=None):
                                'nodeCount': pool['count']}}
     if cluster.get('vpc_uuid'):
         properties['vpcUuid'] = cluster['vpc_uuid']
-    cert = plan['certificate']
+    cert = plan.get('certificate')
     if cert and cert.get('state') != 'verified':
         raise ValueError('Existing certificate must be verified before importing; finish DNS issuance first')
     external = bool(cert and cert.get('type') == 'custom')
-    return {
+    result = {
         'hostname': plan['hostname'],
         'domain': ({'name': plan['domain'],
                     'importId': None if plan['create_domain'] else plan['domain'],
                     'preserveImported': not plan['create_domain']} if plan['domain'] else None),
-        'certificate': {'name': plan['certificate_name'],
+        'certificate': {'name': plan.get('certificate_name'),
                         'mode': 'external' if external else 'managed',
                         'importId': cert['name'] if cert and not external else None,
                         'preserveImported': bool(cert),
@@ -54,9 +65,14 @@ def build_spec(plan, previous=None):
         'cluster': {'importId': cluster['id'] if plan['cluster'] else None,
                     'preserveImported': bool(plan['cluster']), 'properties': properties},
     }
+    if cloudflare:
+        result.update(tlsMode='cloudflare', cloudflare=plan['cloudflare'], domain=None, certificate=None)
+    if plan.get('projectId'):
+        result.update(projectId=plan['projectId'], projectName=plan['projectName'])
+    return result
 
 
-def preview_changes(output):
+def preview_changes(output, managed_urns=()):
     summary = None
     allowed = {'same', 'create', 'update', 'import', 'read', 'read-discard', 'refresh'}
     for line in output.splitlines():
@@ -65,6 +81,8 @@ def preview_changes(output):
         event = json.loads(line)
         metadata = event.get('resourcePreEvent', {}).get('metadata', {})
         op = metadata.get('op')
+        if op in ('create', 'import') and metadata.get('urn') in managed_urns:
+            raise RuntimeError('Previously managed resource is missing; refusing to recreate/adopt it. Inspect the selected stack and cluster before rerunning.')
         if op and op not in allowed:
             raise RuntimeError(f'Wizard refuses Pulumi operation: {op}. No update was applied.')
         if op and op != 'same':
@@ -81,7 +99,7 @@ def preview_changes(output):
 class Pulumi:
     def __init__(self, executable, token, backend):
         parts = urlsplit(backend)
-        if parts.scheme not in ('https', 's3', 'gs', 'azblob', 'file') or parts.username or parts.password:
+        if parts.scheme not in ('https', 's3', 'gs', 'azblob', 'file') or parts.username or parts.password or parts.query or parts.fragment:
             raise ValueError('Use a Pulumi Cloud HTTPS URL or a supported DIY backend without embedded credentials')
         self.executable = executable
         self.env = dict(os.environ, DIGITALOCEAN_TOKEN=token, PULUMI_BACKEND_URL=backend,
@@ -91,12 +109,14 @@ class Pulumi:
             self.env.pop(key, None)
         self.stack = None
         self.config_file = None
+        self.managed_urns = set()
 
     def login(self):
         print('Sign in to the selected Pulumi backend. Follow the CLI browser/token prompts.', flush=True)
         print('An existing valid login can be reused; Pulumi manages its local credentials.', flush=True)
         env = dict(self.env)
         env.pop('DIGITALOCEAN_TOKEN', None)
+        env.pop('CLOUDFLARE_API_TOKEN', None)
         try:
             # Login needs the real terminal for browser/device prompts and hidden input.
             # Never route it through run(), which captures output and disables interaction.
@@ -123,21 +143,40 @@ class Pulumi:
             raise RuntimeError('Pulumi timed out; inspect the stack for an interrupted update before rerunning') from None
         if result.returncode:
             # Provider diagnostics can contain tokens/config/kubeconfig: never echo them.
-            raise RuntimeError(f'Pulumi {args[0]} failed (exit {result.returncode}). '
+            raise RuntimeError(f'Pulumi {" ".join(args[:2]) if args[0] in ("stack", "org", "config") else args[0]} failed (exit {result.returncode}). '
                                'Check Pulumi login, backend access, token scopes and stack update history. '
-                               'Existing resources/state were retained; no rollback was attempted.')
+                               'Existing resources/state were retained; no rollback was attempted. ' +
+                               (f'Inspect https://app.pulumi.com/{self.stack}' if self.stack and self.env['PULUMI_BACKEND_URL'].startswith('https://') else 'Inspect the selected backend stack.'))
         return result.stdout
 
     def select(self, ask):
         identity = json.loads(self.run('whoami', '--json'))
         backend = self.env['PULUMI_BACKEND_URL']
         cloud = backend.startswith('https://')
-        default = f'{identity["user"]}/{PROJECT}/production' if cloud else 'production'
+        organizations = identity.get('organizations', [])
+        organizations = sorted({x['name'] if isinstance(x, dict) else x for x in organizations})
+        if cloud:
+            if not organizations:
+                raise ValueError('Pulumi returned no organization memberships; join an organization before selecting a cloud stack')
+            preferred = None
+            try:
+                preferred = self.run('org', 'get-default').strip()
+            except RuntimeError:
+                pass
+            organization = ask('Pulumi organization (' + ', '.join(organizations) + ')',
+                               preferred if preferred in organizations else organizations[0])
+            if organization not in organizations:
+                raise ValueError('Choose a Pulumi organization from your actual memberships')
+            default = f'{organization}/{PROJECT}/production'
+        else:
+            default = 'production'
         self.stack = ask('Pulumi stack', default)
         if not re.fullmatch(r'[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+){0,2}', self.stack):
             raise ValueError('Invalid Pulumi stack name')
         if cloud and (len(self.stack.split('/')) != 3 or self.stack.split('/')[1] != PROJECT):
             raise ValueError(f'Use OWNER/{PROJECT}/STACK for Pulumi Cloud')
+        if cloud and self.stack.split('/')[0] not in organizations:
+            raise ValueError('Stack owner must be one of your Pulumi organization memberships')
         LOCAL.mkdir(parents=True, exist_ok=True)
         name = hashlib.sha256((backend + '/' + self.stack).encode()).hexdigest()[:20]
         self.config_file = LOCAL / (name + '.yaml')
@@ -149,11 +188,29 @@ class Pulumi:
                 self.run('config', 'refresh', '--force')
         configs = json.loads(self.run('config', '--json'))
         entry = configs.get(PROJECT + ':infrastructure')
-        return json.loads(entry['value']) if entry else None
+        previous = json.loads(entry['value']) if entry else None
+        if previous and previous.get('cloudflare') and not previous['cloudflare'].get('recordId'):
+            state = json.loads(self.run('stack', 'export', '--stack', self.stack))
+            records = [r for r in state.get('deployment', {}).get('resources', [])
+                       if r.get('type') == 'cloudflare:index/dnsRecord:DnsRecord' and r.get('id')]
+            if len(records) > 1:
+                raise ValueError('Stack has ambiguous Cloudflare DNS ownership')
+            if records:
+                previous['cloudflare']['recordId'] = records[0]['id'].split('/')[-1]
+        return previous
 
     def verify_ownership(self, plan):
         state = json.loads(self.run('stack', 'export', '--stack', self.stack))
         resources = state.get('deployment', {}).get('resources', [])
+        record_id = plan.get('cloudflare', {}).get('recordId')
+        if record_id and not any(item.get('custom') and not item.get('external')
+                                 and item.get('type') == 'cloudflare:index/dnsRecord:DnsRecord'
+                                 and item.get('id') in (record_id, plan['cloudflare']['zoneId'] + '/' + record_id)
+                                 for item in resources):
+            raise ValueError('Cloudflare A record is not owned by this stack; choose an unused hostname or review its migration separately')
+        self.managed_urns = {item['urn'] for item in resources
+                             if item.get('custom') and not item.get('external')
+                             and item.get('id') and item.get('urn')}
         for item in resources:
             if not item.get('custom') or item.get('external'):
                 continue
@@ -163,6 +220,12 @@ class Pulumi:
                 actual = (plan['cluster'] or {}).get('id')
             elif kind == 'digitalocean:index/certificate:Certificate':
                 actual = (plan['certificate'] or {}).get('name')
+            elif kind == 'cloudflare:index/dnsRecord:DnsRecord':
+                settings = plan.get('cloudflare', {})
+                record = settings.get('recordId')
+                actual = settings.get('zoneId', '') + '/' + record if record else None
+                if record and item.get('id') == record:
+                    actual = record
             elif kind == 'digitalocean:index/domain:Domain':
                 actual = None if plan['create_domain'] else plan['domain']
             else:
@@ -181,7 +244,7 @@ class Pulumi:
             saved = str(Path(temp) / 'plan.json')
             print('Running Pulumi preview ...', flush=True)
             summary = preview_changes(self.run('preview', '--json', '--refresh',
-                                                '--save-plan', saved, '--suppress-outputs'))
+                                                '--save-plan', saved, '--suppress-outputs'), self.managed_urns)
             print('Changes: ' + ', '.join(f'{op}={count}' for op, count in sorted(summary.items())))
             if input('Apply this Pulumi plan and save GitHub settings? [no]: ').strip().lower() != 'yes':
                 print('Cancelled. Pulumi configuration is saved locally; no cloud/GitHub update was applied.')
@@ -189,16 +252,19 @@ class Pulumi:
             print('Applying reviewed plan; certificate/cluster creation can take several minutes ...', flush=True)
             self.run('up', '--yes', '--skip-preview', '--plan', saved, '--suppress-outputs')
         outputs = json.loads(self.run('stack', 'output', '--json', '--stack', self.stack))
-        return configuration({'DOKS_CLUSTER_ID': outputs['clusterId'],
-                              'REPOSILITE_HOSTNAME': outputs['hostname'],
-                              'DO_CERTIFICATE_NAME': outputs['certificateName']})
+        values = {'DOKS_CLUSTER_ID': outputs['clusterId'], 'REPOSILITE_HOSTNAME': outputs['hostname']}
+        if outputs.get('tlsMode') == 'cloudflare':
+            values['TLS_MODE'] = 'cloudflare'
+        else:
+            values['DO_CERTIFICATE_NAME'] = outputs['certificateName']
+        return configuration(values)
 
 
 def prepare(token, ask):
     executable = shutil.which('pulumi')
     if not executable:
         raise RuntimeError('Install Pulumi CLI from https://www.pulumi.com/docs/install/ and rerun setup; login is guided.')
-    if any(importlib.util.find_spec(name) is None for name in ('pulumi', 'pulumi_digitalocean')):
+    if any(importlib.util.find_spec(name) is None for name in ('pulumi', 'pulumi_digitalocean', 'pulumi_kubernetes', 'pulumi_cloudflare')):
         raise RuntimeError('Run setup with uv run python scripts/setup_environment.py to install the project dependencies.')
     backend = ask('Pulumi state backend', os.environ.get('PULUMI_BACKEND_URL', 'https://api.pulumi.com'))
     client = Pulumi(executable, token, backend)
