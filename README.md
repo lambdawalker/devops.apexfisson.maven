@@ -23,16 +23,17 @@ Retain reduces accidental volume deletion; it does **not** provide backups.
 
 ## Start here
 
-1. **[Setup](docs/setup.md)**: cluster, administrator, domain and TLS.
-2. **[Publishing and consuming](docs/publishing.md)**: scoped tokens and Gradle.
-3. **[Operations](docs/operations.md)**: backups, restore, upgrades and diagnostics.
-4. **[GitHub deployment](docs/github-deployment.md)**: environment settings and the
+1. **[Setup wizard](docs/setup-wizard.md)**: create/reuse DigitalOcean infrastructure
+   and configure GitHub from Windows or Linux.
+2. **[Setup](docs/setup.md)**: private deployment and administrator bootstrap.
+3. **[Publishing and consuming](docs/publishing.md)**: scoped tokens and Gradle.
+4. **[Operations](docs/operations.md)**: backups, restore, upgrades and diagnostics.
+5. **[GitHub deployment](docs/github-deployment.md)**: environment settings and the
    manual **Deploy Reposilite** workflow.
-   Use the **[Python setup wizard](docs/setup-wizard.md)** to configure that
-   environment interactively on Windows or Linux.
 
-You need a DigitalOcean account/API token, a domain, `doctl`, `kubectl`, and
-Bash (WSL on Windows works). Python is only needed for local validation.
+The setup wizard needs Python 3.10+, GitHub CLI, access tokens and a domain you
+own. The remaining private administrator setup uses `doctl`, `kubectl`, and
+Bash (WSL on Windows works).
 Validation CI needs no DigitalOcean credentials. Manual deployment uses a token
 stored in the GitHub `production` environment.
 
@@ -51,7 +52,7 @@ application highly available. Do not scale Reposilite beyond one replica.
 | `tests/` | Storage, security and exposure checks |
 | `.github/workflows/validate.yml` | Credential-free validation |
 | `.github/workflows/deploy.yml` | Manual deployment to the existing DOKS cluster |
-| `scripts/setup_environment.py` | Cross-platform environment setup wizard |
+| `scripts/setup_environment.py` | Cross-platform DigitalOcean and GitHub setup wizard |
 | `docs/design.md` | Architecture and tradeoffs |
 
 ## References

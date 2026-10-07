@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Test setup wizard without credentials
-        run: python -m unittest discover -s tests -p test_setup_environment.py -v
+        run: python -m unittest discover -s tests -p "test_setup*.py" -v
       - name: Check standalone entry point
         run: python scripts/setup_environment.py --help
 

@@ -3,6 +3,11 @@
 Run commands from the repository root in Bash (Linux, macOS or WSL). Keep
 credentials and kubeconfig outside Git. Provisioning creates billable resources.
 
+For automated infrastructure and GitHub environment setup on Windows or Linux,
+start with the [Python wizard](setup-wizard.md). If you used it, skip cluster and
+certificate creation below; connect to that cluster and complete private setup
+steps 2–3 before deploying publicly.
+
 ## 1. Create or select DOKS
 
 Install [doctl](https://docs.digitalocean.com/reference/doctl/how-to/install/)

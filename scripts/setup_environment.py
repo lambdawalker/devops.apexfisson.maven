@@ -1,4 +1,4 @@
-"""Interactive Windows/Linux setup for the GitHub production environment.
+"""Interactive Windows/Linux setup for DigitalOcean and GitHub production.
 
 Requires Python 3.10+ and GitHub CLI. Uses only the Python standard library.
 """
@@ -120,9 +120,19 @@ def main():
     parser.add_argument("--repo", help=f"GitHub owner/repo (default prompt: {DEFAULT_REPO})")
     parser.add_argument("--token-auth", action="store_true",
                         help="Privately prompt for a GitHub PAT instead of using gh's saved login")
+    parser.add_argument("--github-only", action="store_true",
+                        help="Configure GitHub only, using an existing cluster UUID and certificate")
+    parser.add_argument("--saved-login", action="store_true",
+                        help="Use saved gh login instead of prompting for a GitHub token")
     args = parser.parse_args()
+    if args.saved_login and args.token_auth:
+        parser.error("--saved-login and --token-auth cannot be combined")
     if not sys.stdin.isatty():
         raise RuntimeError("Run this wizard interactively in a terminal, without redirected input")
+    if not args.github_only:
+        from setup_cloud import run
+        run(args)
+        return
     executable = shutil.which("gh")
     if not executable:
         raise RuntimeError("Install GitHub CLI from https://cli.github.com/ and reopen your terminal")
