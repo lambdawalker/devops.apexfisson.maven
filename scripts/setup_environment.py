@@ -1,4 +1,4 @@
-"""Interactive Windows/Linux setup for DigitalOcean and GitHub production.
+"""Interactive Windows/Linux setup for DigitalOcean, Cloudflare and GitHub production.
 
 Run with uv run python scripts/setup_environment.py (Python 3.13+ project).
 Requires GitHub CLI and Pulumi CLI; Pulumi login is guided.
@@ -123,7 +123,7 @@ def main():
     parser.add_argument("--token-auth", action="store_true",
                         help="Privately prompt for a GitHub PAT instead of using gh's saved login")
     parser.add_argument("--github-only", action="store_true",
-                        help="Configure GitHub only, using an existing cluster UUID and certificate")
+                        help="Configure GitHub only, using an existing cluster UUID and TLS mode")
     parser.add_argument("--saved-login", action="store_true",
                         help="Use saved gh login instead of prompting for a GitHub token")
     args = parser.parse_args()
@@ -162,10 +162,13 @@ def main():
             "variable", "list", "--repo", repo, "--env", ENVIRONMENT, "--json", "name,value"))}
         secret_exists = SECRET in {item["name"] for item in json.loads(client.run(
             "secret", "list", "--repo", repo, "--env", ENVIRONMENT, "--json", "name"))}
+    mode = ask("TLS mode (cloudflare/digitalocean)", defaults.get("TLS_MODE", "cloudflare"))
     values = configuration({
+        "TLS_MODE": mode,
         "DOKS_CLUSTER_ID": ask("DOKS cluster UUID", defaults.get("DOKS_CLUSTER_ID", "")),
         "REPOSILITE_HOSTNAME": ask("Maven hostname", defaults.get("REPOSILITE_HOSTNAME", "")),
-        "DO_CERTIFICATE_NAME": ask("DO certificate name", defaults.get("DO_CERTIFICATE_NAME", "")),
+        "DO_CERTIFICATE_NAME": (ask("DO certificate name", defaults.get("DO_CERTIFICATE_NAME", ""))
+                                if mode == "digitalocean" else ""),
     })
     suffix = " (Enter keeps existing)" if secret_exists else " (required)"
     token = hidden(f"DigitalOcean API token{suffix}: ")

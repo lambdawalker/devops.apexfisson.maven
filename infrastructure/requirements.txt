@@ -1,2 +1,4 @@
 pulumi==3.268.0
 pulumi-digitalocean==4.81.0
+pulumi-kubernetes==4.32.0
+pulumi-cloudflare==6.12.0

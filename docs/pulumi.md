@@ -1,153 +1,115 @@
 # Pulumi infrastructure
 
-The setup wizard uses the Python project in `infrastructure/` to manage the DOKS
-cluster, DNS zone (when selected), and managed TLS certificate. Pulumi owns those
-resources. The existing **Deploy Reposilite** action owns the Kubernetes application,
-Service and persistent storage. Do not manage the same resources with both tools.
+Run `uv run python scripts/setup_environment.py` from the repository root. Install
+uv, GitHub CLI and Pulumi CLI first; the wizard guides Pulumi login. See the
+[setup wizard](setup-wizard.md) for token scopes, prompts and costs.
 
-## Install and authenticate
+## Ownership
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/),
-[Pulumi CLI](https://www.pulumi.com/docs/install/) (tested with **3.268.0**), and
-GitHub CLI. From the repository root, use the same command on Windows or Linux:
+| Owner | Resources |
+| --- | --- |
+| Pulumi | DOKS cluster/project membership, Traefik gateway/LoadBalancer, cert-manager, Cloudflare credential Secret, ClusterIssuer, one Cloudflare A record |
+| Application manifests and manual GitHub deployment | Reposilite namespace, Deployment, retained storage/PVC, private Service, HTTPS Ingress |
+| cert-manager | Certificate generated from Ingress, TLS Secret and automatic renewals |
+| Cloudflare account owner | Existing zone, nameservers and all unrelated DNS records |
+
+Traefik serves the `reposilite-edge` ingress class. The gateway load balancer passes
+TCP traffic through; TLS terminates at Traefik. cert-manager uses Cloudflare DNS-01
+verification with Let's Encrypt and reloads certificates through Kubernetes Secrets.
+Only the manual deployment creates the Reposilite route. Pulumi does not install or
+bootstrap the application. Existing DigitalOcean TLS deployments retain their legacy
+overlay and certificate support.
+
+## Backend, organization and state
+
+The backend defaults to Pulumi Cloud (`https://api.pulumi.com`) or
+`PULUMI_BACKEND_URL`. The organization is discovered from `pulumi whoami --json`,
+not inferred from your username. A configured accessible default is preferred.
+For example, `lambdawalker` can select `isdavid/apexfission-maven/production`.
+DIY backends use an unqualified stack such as `production`.
+
+Use **the same backend and stack** on every run. Never import resources into two
+stacks. Selecting a stack may create empty Pulumi state before infrastructure review.
+A DIY backend needs its own storage credentials and configured secrets provider;
+use a strong `PULUMI_CONFIG_PASSPHRASE` or file variant when appropriate. Back up
+state and preserve the encryption key. A local file backend is not shared CI state.
+
+Nonsecret desired configuration is stored under ignored `.local/pulumi/`, named by
+a hash of backend/stack identity. On a new checkout, configuration can be recovered
+from the backend after an update. Existing local configuration remains authoritative,
+including unapplied edits. Tokens are environment inputs, not config fields. The
+kubeconfig and Cloudflare credential Secret are encrypted as Pulumi secrets; neither
+is exported. Backend access with decryption rights remains privileged.
+
+## Preview, apply and recovery
+
+The wizard performs read-only discovery, shows configuration and previews changes
+before an explicit apply confirmation. It refuses deletions, replacements and
+unrecognized operations. Owned resources are protected. Cancelled previews retain
+local configuration; failed applies may retain partially created resources.
+
+If an update fails, open the selected stack in Pulumi Cloud and inspect the latest
+update's diagnostics. The script identifies the failed CLI operation and offers
+safe diagnostic guidance; raw provider output is withheld because it can contain
+credentials. Do not delete state or change stack names to get around an error.
+
+On reruns, declared cluster settings and import policy are retained. A managed
+resource missing from discovery is an error, not permission to recreate it.
+Existing clusters are imported with `ignoreChanges: ["*"]` to preserve settings
+not represented by the wizard (additional pools, autoscaling, taints and more).
+Before disabling preservation, model all those settings and review the preview.
+For new clusters, auto-upgraded version drift is ignored to avoid downgrades.
+
+## Migrate the failed DigitalOcean DNS setup
+
+For the reported partial stack `isdavid/apexfission-maven/production`, continue
+with that exact stack and choose the Cloudflare migration when prompted.
+
+- Retain the previously created DigitalOcean zone in the same Pulumi state. It is
+  non-authoritative while nameservers remain at Cloudflare, so no DNS cutover occurs.
+- Retain any genuinely existing legacy certificate; do not request the failed
+  DigitalOcean managed certificate again.
+- Preserve any existing cluster and its identity/configuration.
+- Add gateway/certificate infrastructure and a Cloudflare DNS-only record.
+- Save `TLS_MODE=cloudflare` in GitHub. A leftover `DO_CERTIFICATE_NAME` variable is
+  ignored in this mode.
+
+Retained legacy resources are intentionally not deleted by this migration. Remove
+them only in a separately reviewed cleanup after checking dependencies. A fully
+running legacy deployment needs an explicit cutover plan: check its old load
+balancer, DNS address and bootstrap status before switching public application mode.
+
+## DigitalOcean projects
+
+Select an existing project; the first-run default is the account's default project.
+The saved selection wins on subsequent runs. Pulumi assigns the cluster without
+importing or taking ownership of the entire project. Other project resources remain
+unmanaged. DigitalOcean notes that associated load balancers and volumes can start
+in the default project even when their cluster belongs elsewhere; check placement,
+especially for volumes created later by Kubernetes.
+
+## Verification
+
+CI uses SDK mocks and simulated CLI/API results, creates no cloud resources and
+requires no tokens. The setup wizard runs on Windows and Linux; uv locks SDKs.
+The GitHub application action does not run Pulumi or need Cloudflare credentials.
+
+After a live setup, verify the selected DO project, DNS-only A record, gateway IP,
+`ClusterIssuer/cloudflare-letsencrypt` readiness, absence of a Reposilite route
+before bootstrap, and application Certificate readiness after the manual deploy.
+Then verify trusted HTTPS, redirect, WebSocket console, authenticated upload/download,
+persistence after restart and the offline backup/restore procedure.
+
+Useful diagnostics (after obtaining kubeconfig):
 
 ```text
-uv run python scripts/setup_environment.py
+kubectl -n reposilite-edge get pods,service
+kubectl -n cert-manager get pods
+kubectl get clusterissuer cloudflare-letsencrypt
+kubectl -n reposilite get ingress,certificate
+kubectl -n reposilite describe certificate reposilite-tls
+kubectl -n reposilite get orders,challenges
 ```
 
-uv manages the project's Python environment and dependencies using `pyproject.toml`
-and `uv.lock`. The project requires Python 3.13 or newer; uv can provision a
-compatible Python installation. No manual virtual-environment activation, pip
-installation, PowerShell, or separate `pulumi login` command is required.
-
-After asking for the state backend, the wizard runs **`pulumi login <backend>`**
-interactively. Follow Pulumi's browser or token prompts in the terminal. An existing
-valid session or `PULUMI_ACCESS_TOKEN` can be reused. Pulumi CLI manages persistence
-of that login. Failed/cancelled login stops before stack selection; rerunning setup
-starts this step again. This login step does not receive your DigitalOcean token.
-
-The wizard uses the same uv Python executable to run the Pulumi program.
-`--saved-login` reuses GitHub CLI authentication; Pulumi login still runs.
-`--github-only` skips all Pulumi steps. The wizard privately asks for the
-DigitalOcean token and, by default, a GitHub token as before.
-
-## Backend and stack
-
-The backend prompt defaults to `https://api.pulumi.com`, or `PULUMI_BACKEND_URL`
-when set. The Cloud stack defaults to `YOUR_PULUMI_ACCOUNT/apexfission-maven/production`;
-you can enter an organization's stack instead. The project name remains
-`apexfission-maven`. For a DIY backend, the stack prompt defaults to `production`.
-
-Use **the same backend and stack every time**. Do not import a resource into more
-than one stack. Stack selection can create an empty state record before the
-infrastructure review; it creates no DigitalOcean resources.
-
-Self-managed `s3://`, `gs://`, `azblob://`, and `file://` backends are supported by
-Pulumi. Configure storage credentials and the secrets provider before running the
-wizard. A passphrase backend needs `PULUMI_CONFIG_PASSPHRASE` (or its file variant)
-available to the CLI; never use an empty passphrase for production. A local file
-backend is suitable for experiments, but is not a shared CI backend. Back up state
-and retain the secrets-provider key. See [state and backends](https://www.pulumi.com/docs/iac/concepts/state-and-backends/).
-
-Nonsecret stack configuration is stored under ignored `.local/pulumi/`, in a YAML
-file named by a hash of the backend/stack identity. This prevents stacks in
-different accounts/backends from overwriting each other's local configuration.
-After an update, config is also associated with the deployment in the backend.
-On a new checkout, the wizard restores it from the backend. If local config exists,
-it is treated as the operator's desired configuration, including unapplied edits.
-The wizard prints the full nonsecret desired configuration before preview.
-
-The Pulumi config file is not the state itself. State stays in the chosen backend.
-Credentials are not put in the config: the DO token goes to the child process via
-`DIGITALOCEAN_TOKEN`. Cluster `kubeConfigs` outputs are explicitly secret in state;
-only cluster UUID, hostname and certificate name are exported. Treat backend
-access as privileged even though secret outputs are encrypted.
-
-## Preview and apply
-
-The wizard performs read-only DO discovery, then prepares a configuration proposal.
-Confirm preparation to run a Pulumi preview. The preview refreshes the resource
-view, prints operations, and saves a temporary plan. Review the displayed desired
-configuration and operations, then type `yes` to apply that plan and save GitHub
-settings. Enter cancels. The wizard refuses deletions, replacements and unknown
-operation kinds; `protect=True` also guards every owned resource.
-
-Cancellation retains staged local config but applies no cloud/GitHub update.
-A failed apply may leave resources and Pulumi state. The temporary plan is discarded
-on success, failure or cancellation; the next attempt gets a fresh preview.
-Pulumi failures show a safe summary rather than raw provider diagnostics that might
-contain credentials. Inspect the stack's update history for details. CLI operations
-have a 45-minute timeout; an interrupted update needs inspection before retrying.
-
-A new managed certificate depends on the DNS zone, and the cluster depends on the
-certificate. The provider waits for certificate verification before creating the
-cluster. Domain purchase, nameserver delegation and migration of existing DNS
-records remain operator tasks. Existing certificates must already be verified.
-
-## Import existing infrastructure
-
-The wizard discovers resources by unique name and configures Pulumi imports:
-
-| Resource | Provider import ID |
-| --- | --- |
-| DOKS cluster | DigitalOcean cluster UUID |
-| DNS zone | Domain name |
-| Managed certificate | Certificate **name**, which survives renewal |
-
-New resources are managed immediately. Imported resources start with
-`preserveImported: true`, intentionally leaving their current configuration under
-external management while Pulumi records and protects them. This uses
-`ignoreChanges: ["*"]`: editing desired inputs has no effect until you opt in.
-The review shows imports, not replacement resources. An existing custom certificate
-is read as an external reference because DO cannot return its private key; Pulumi
-does not manage its renewal or deletion.
-
-On reruns, the selected stack's existing config is authoritative. If discovery
-finds a different/missing ID than the stack owns, the wizard stops instead of
-silently recreating or adopting another resource. It also rejects name/hostname
-changes made through setup prompts against an established config; deliberate
-identity changes need a separate migration review.
-
-Before disabling `preserveImported`, compare the program with the imported state.
-The wizard snapshots only the basic cluster fields and first node pool; unusual
-clusters with multiple pools, autoscaling, custom maintenance, labels, taints,
-firewalls or integrations need their settings represented in the program first.
-Keeping preservation enabled retains all of those settings. Do not enable full
-management simply to silence a diff. Refer to [Pulumi import guidance](https://www.pulumi.com/docs/iac/guides/migration/import/).
-
-## Later infrastructure changes
-
-For resources created by this project, edit the `infrastructure` JSON value in the
-selected `.local/pulumi/<hash>.yaml` file, then rerun the wizard with the same stack.
-For example, change `cluster.properties.nodePool.nodeCount` from `1` to `2`.
-Pulumi previews the resize before applying it. This adds a Kubernetes worker;
-Reposilite itself still has exactly one replica.
-
-For imports, first model the existing settings as described above and deliberately
-set that resource's `preserveImported` to false. All owned resources remain protected.
-
-When `cluster.properties.autoUpgrade` is true, version drift is deliberately
-ignored so a DO patch upgrade is not reverted to the original version. To manage
-a version explicitly, set `autoUpgrade` false and choose a supported newer version
-before previewing. Do not attempt Kubernetes downgrades.
-
-Normal setup and updates happen locally through the wizard. The existing GitHub
-application deployment action neither runs Pulumi nor needs Pulumi credentials.
-If infrastructure CI is added later, it must use this same backend/stack, have
-explicit authorization and concurrency controls, and keep previews credential-free
-on untrusted pull requests. Do not add `pulumi up` to the validation workflow.
-
-Protection guards Pulumi operations; it cannot stop deletion from the DO console.
-The cluster resource also sets `destroyAllAssociatedResources` false. Neither is
-a backup. Preserve the existing retained-volume and offline backup procedures.
-
-## Next steps after infrastructure setup
-
-Connect with doctl/kubectl and complete [setup](setup.md) steps 2–3 to bootstrap
-Reposilite privately. Then run [Deploy Reposilite](github-deployment.md) and set
-the final DNS A record to its load-balancer IP. The wizard does not create a
-Reposilite administrator, deploy the application or run a GitHub workflow.
-
-Tests use Pulumi mocks and simulated CLI results; the Windows/Linux CI matrix
-creates no cloud resources. Live provisioning still requires your credentials and
-confirmation of the preview.
+Investigate failed DNS challenges using cert-manager events. Keep the Cloudflare
+token valid for future renewals. Never print the credential Secret to collect logs.

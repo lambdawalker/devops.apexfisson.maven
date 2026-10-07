@@ -94,9 +94,9 @@ class SpecTests(unittest.TestCase):
     def test_new_stack_does_not_refresh_nonexistent_deployment_config(self):
         client = self.mod.Pulumi('pulumi', 'do-secret', 'https://api.pulumi.com')
         responses = {
-            'whoami': json.dumps({'user': 'owner'}),
+            'whoami': json.dumps({'user': 'person', 'organizations': ['owner']}),
             'stack': json.dumps({'deployment': {}}),
-            'config': '{}',
+            'config': '{}', 'org': 'owner',
         }
         with tempfile.TemporaryDirectory() as tmp, patch.object(self.mod, 'LOCAL', Path(tmp)), \
                 patch.object(client, 'run', side_effect=lambda *a: responses[a[0]]) as run, \

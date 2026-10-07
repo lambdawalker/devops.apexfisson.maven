@@ -45,6 +45,54 @@ class DeploymentTests(unittest.TestCase):
                 "service.beta.kubernetes.io/do-loadbalancer-certificate-name"])
             self.assertEqual({80, 443}, {p["port"] for p in svc["spec"]["ports"]})
 
+    def test_cloudflare_render_uses_private_service_and_tls_ingress(self):
+        conf = self.deploy.configuration({
+            "DOKS_CLUSTER_ID": self.config["DOKS_CLUSTER_ID"],
+            "REPOSILITE_HOSTNAME": "maven.apexfission.com", "TLS_MODE": "cloudflare"})
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            path = self.deploy.write_overlay(conf, Path(directory))
+            result = subprocess.check_output(
+                [os.environ.get("KUBECTL", "kubectl"), "kustomize", str(path)], text=True)
+        import yaml
+        docs = list(yaml.safe_load_all(result))
+        service = next(d for d in docs if d["kind"] == "Service")
+        self.assertEqual("ClusterIP", service["spec"]["type"])
+        ingress = next(d for d in docs if d["kind"] == "Ingress")
+        self.assertEqual("reposilite-edge", ingress["spec"]["ingressClassName"])
+        self.assertEqual("maven.apexfission.com", ingress["spec"]["rules"][0]["host"])
+        self.assertEqual(["maven.apexfission.com"], ingress["spec"]["tls"][0]["hosts"])
+        self.assertEqual("reposilite-tls", ingress["spec"]["tls"][0]["secretName"])
+        self.assertEqual("cloudflare-letsencrypt", ingress["metadata"]["annotations"][
+            "cert-manager.io/cluster-issuer"])
+        dep = next(d for d in docs if d["kind"] == "Deployment")
+        self.assertFalse(dep["spec"]["template"]["spec"]["containers"][0].get("envFrom"))
+
+    def test_invalid_tls_mode_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.deploy.configuration({**self.config, "TLS_MODE": "unknown"})
+
+    def test_cloudflare_waits_for_certificate_and_ingress(self):
+        calls, run = self.fake_cluster()
+        with patch.object(self.deploy.subprocess, "run", side_effect=run):
+            self.deploy.apply(Path("rendered.yaml"), tls_mode="cloudflare")
+        self.assertTrue(any("certificate/reposilite-tls" in c for c in calls))
+        self.assertTrue(any("ingress/reposilite" in c for c in calls))
+        self.assertFalse(any("service/reposilite" in c and "wait" in c for c in calls))
+
+    def test_cloudflare_apply_writes_action_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary.md"
+            with patch.dict(os.environ, {"TLS_MODE": "cloudflare",
+                    "DOKS_CLUSTER_ID": self.config["DOKS_CLUSTER_ID"],
+                    "REPOSILITE_HOSTNAME": "maven.apexfission.com",
+                    "GITHUB_STEP_SUMMARY": str(summary)}), \
+                    patch("sys.argv", ["deploy.py", "apply"]), \
+                    patch.object(self.deploy, "apply"), patch.object(self.deploy, "kubectl"):
+                self.deploy.main()
+            text = summary.read_text()
+            self.assertIn("https://maven.apexfission.com", text)
+            self.assertIn("Cloudflare DNS is managed by Pulumi", text)
+
     def fake_cluster(self, blocker=None, fail_dry_run=False):
         calls = []
         def run(args, **kwargs):

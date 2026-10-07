@@ -5,7 +5,7 @@ credentials and kubeconfig outside Git. Provisioning creates billable resources.
 
 For automated infrastructure and GitHub environment setup on Windows or Linux,
 start with the [Python wizard](setup-wizard.md). If you used it, skip cluster and
-certificate creation below; connect to that cluster and complete private setup
+legacy certificate creation below; connect to that cluster and complete private setup
 steps 2–3 before deploying publicly.
 
 ## 1. Create or select DOKS
@@ -120,7 +120,45 @@ Verify `admin` still works after restart and `bootstrap` fails. Stop port-forwar
 Do not expose the service until both checks pass. Production also removes the
 Secret reference, so a forgotten Secret cannot reactivate bootstrap credentials.
 
-## 4. Prepare the hostname and certificate
+## 4. Cloudflare HTTPS (wizard setup)
+
+If you used the Cloudflare wizard, your nameservers stay at Cloudflare. The gateway,
+DNS-only A record, cert-manager and ClusterIssuer are already installed. After steps
+2–3, run **Actions → Deploy Reposilite** on `main` with `TLS_MODE=cloudflare` in
+the GitHub production environment. The action installs the Ingress and waits for
+cert-manager to issue its certificate. No DigitalOcean certificate name is needed.
+
+Check certificate status and verify external HTTPS, HTTP redirect, administrator
+login, dashboard Console WebSocket, and a test upload/download. The gateway has no
+Reposilite route until this deployment; a 404 beforehand is expected.
+
+For local deployment using the same preflight checks, set the variables and use the
+context alias created by the workflow:
+
+```bash
+(
+set -euo pipefail
+export DOKS_CLUSTER_ID='YOUR_CLUSTER_UUID'
+export REPOSILITE_HOSTNAME='maven.apexfission.com'
+export TLS_MODE=cloudflare
+doctl kubernetes cluster kubeconfig save "$DOKS_CLUSTER_ID" --expiry-seconds 3600 --alias reposilite-deploy
+uv run python scripts/deploy.py render
+kubectl kustomize .local/ci > .local/ci/rendered.yaml
+uv run python scripts/deploy.py apply
+)
+```
+
+After a public deployment, applying the private base alone does **not** remove an
+existing Ingress. To take the public route offline, explicitly delete that Ingress
+before further bootstrap work. Preserve data/PVC and follow the offline maintenance
+runbook. Do not create another DNS record for the gateway manually.
+
+## 5. Legacy DigitalOcean TLS setup
+
+The following instructions apply only to `TLS_MODE=digitalocean`, with the legacy
+production overlay and no Cloudflare gateway migration.
+
+### Prepare the hostname and certificate
 
 Choose a hostname, e.g. `maven.your-domain.com`.
 
@@ -128,14 +166,14 @@ Choose a hostname, e.g. `maven.your-domain.com`.
   hostname in **Networking → Certificates**. Give it a unique name such as
   `apexfission-maven-tls` and wait for issuance.
 - With external DNS, import a certificate/private key into DO and arrange
-  renewal, or move DNS to DO for managed issuance. No cert-manager is installed.
+  renewal, or move DNS to DO for managed issuance. The legacy mode does not install cert-manager.
 
 See [certificate management](https://docs.digitalocean.com/products/networking/load-balancers/how-to/manage-certificates/).
 Use `doctl compute certificate list` to get the certificate **name**, which
 survives managed renewal. The certificate must exist before public deployment.
 TLS terminates at the load balancer; the internal backend connection uses HTTP.
 
-## 5. Expose HTTPS
+### Expose HTTPS
 
 You can use the manual [GitHub deployment workflow](github-deployment.md) for
 this step and subsequent updates, or follow the local commands below.

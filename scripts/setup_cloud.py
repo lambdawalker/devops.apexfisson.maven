@@ -3,6 +3,7 @@ import json
 import re
 import shutil
 
+from cloudflare import Cloudflare, discover
 from digitalocean import DigitalOcean, named, latest_version, check_certificate
 from setup_environment import (GitHub, ENVIRONMENT, DEFAULT_REPO, ask, hidden,
                                authenticate, save)
@@ -17,13 +18,13 @@ def token(label):
     return value
 
 
-def collect(client, defaults):
+def collect(client, defaults, cloudflare=None, previous=None):
     clusters = client.list('/kubernetes/clusters', 'kubernetes_clusters')
-    domains = client.list('/domains', 'domains')
-    certificates = client.list('/certificates', 'certificates')
-    previous = next((c for c in clusters if c['id'] == defaults.get('DOKS_CLUSTER_ID')), None)
+    domains = client.list('/domains', 'domains') if not cloudflare or (previous or {}).get('domain') else []
+    certificates = client.list('/certificates', 'certificates') if not cloudflare or (previous or {}).get('certificate') else []
+    github_cluster = next((c for c in clusters if c['id'] == defaults.get('DOKS_CLUSTER_ID')), None)
     cluster_name = ask('Cluster name (existing names are reused)',
-                       previous['name'] if previous else defaults.get('DOKS_CLUSTER_NAME', 'apexfission-maven'))
+                       github_cluster['name'] if github_cluster else defaults.get('DOKS_CLUSTER_NAME', 'apexfission-maven'))
     if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', cluster_name):
         raise ValueError('Cluster name must use 1-63 lowercase letters, numbers or internal hyphens')
     cluster = named(clusters, cluster_name)
@@ -51,9 +52,26 @@ def collect(client, defaults):
                 'ha': False, 'auto_upgrade': True, 'surge_upgrade': True,
                 'maintenance_policy': {'day': 'saturday', 'start_time': '06:00'}}
     domain_names = sorted(d['name'] for d in domains)
-    suggested_host = 'maven.' + domain_names[0] if domain_names else 'maven.your-domain.com'
-    print('Use a hostname you own. New managed certificates require DNS delegated to DigitalOcean.')
+    zones = cloudflare.list('/zones', status='active') if cloudflare else None
+    if cloudflare and not zones:
+        raise ValueError('No active Cloudflare zones are visible to this token')
+    suggested_host = ('maven.' + sorted(z['name'] for z in zones)[0] if cloudflare else
+                      'maven.' + domain_names[0] if domain_names else 'maven.your-domain.com')
+    print('Use a hostname in an active Cloudflare zone.' if cloudflare else
+          'Use a hostname you own. New managed certificates require DNS delegated to DigitalOcean.')
     hostname = ask('Maven hostname', defaults.get('REPOSILITE_HOSTNAME', suggested_host)).lower()
+    if cloudflare:
+        configuration({'DOKS_CLUSTER_ID': '00000000-0000-0000-0000-000000000000',
+                       'REPOSILITE_HOSTNAME': hostname, 'TLS_MODE': 'cloudflare'})
+        legacy_certificate = (previous or {}).get('certificate')
+        certificate = named(certificates, legacy_certificate['name']) if legacy_certificate else None
+        domain_spec = (previous or {}).get('domain')
+        if domain_spec and domain_spec['name'] not in domain_names:
+            raise ValueError('Legacy managed DigitalOcean domain is missing; refusing migration')
+        return {'cluster': cluster, 'cluster_body': body, 'hostname': hostname, 'tlsMode': 'cloudflare',
+                'cloudflare': discover(cloudflare, hostname, ask, (previous or {}).get('cloudflare'), available_zones=zones),
+                'certificate': certificate, 'certificate_name': legacy_certificate['name'] if legacy_certificate else None,
+                'domain': domain_spec['name'] if domain_spec else None, 'create_domain': False}
     certificate_name = ask('Certificate name', defaults.get('DO_CERTIFICATE_NAME',
                                                            cluster_name + '-tls'))
     # Reuse deployment validation; the real UUID is supplied after provisioning.
@@ -97,6 +115,18 @@ def review(repo, plan):
         print('Maintenance: Saturday 06:00 UTC. Workers continue billing until deleted.')
         print('Review pricing: https://docs.digitalocean.com/products/kubernetes/details/pricing/')
     print(f'Hostname: {plan["hostname"]}')
+    if plan.get('projectId'):
+        print(f'DigitalOcean project: {plan["projectName"]} ({plan["projectId"]}); cluster assigned explicitly.')
+        print('Associated load balancers and volumes may remain in the account default project.')
+    if plan.get('tlsMode') == 'cloudflare':
+        print('CREATE/REUSE BILLABLE gateway load balancer with Traefik TCP ports 80/443.')
+        print('Cloudflare DNS-only A record; automatic DNS-01 TLS renewal.')
+        print('Cloudflare token stored as a Kubernetes Secret and encrypted Pulumi secret for renewal.')
+        print('Set/replace DIGITALOCEAN_ACCESS_TOKEN in GitHub (hidden).')
+        print('Existing GitHub environment protection rules are preserved.')
+        print('Cloudflare nameservers remain unchanged. No application route is installed.')
+        print('Save cluster UUID, hostname and TLS_MODE=cloudflare to GitHub.')
+        return ask('Prepare a Pulumi preview for these resources? yes/no', 'no').lower() == 'yes'
     print(f'{"Reuse" if plan["certificate"] else "Create managed"} certificate: '
           f'{plan["certificate_name"]}')
     if not plan['certificate']:
@@ -128,8 +158,23 @@ def provision(client, github, repo, plan, do_token, existing, pulumi_client, pre
     print('\nInfrastructure and GitHub environment configured; variables and secret metadata verified.')
     print(f'GitHub settings: https://github.com/{repo}/settings/environments')
     print('Next: follow docs/setup.md steps 2-3 to install privately and create a persistent admin.')
-    print('Then run Actions > Deploy Reposilite on main and point the hostname A record at the LB IP.')
+    print('Then run Actions > Deploy Reposilite on main.' if plan.get('tlsMode') == 'cloudflare' else
+          'Then run Actions > Deploy Reposilite on main and point the hostname A record at the LB IP.')
     print('No application deployment or workflow was triggered. See docs/pulumi.md for infrastructure updates.')
+
+
+def choose_project(client, previous=None):
+    projects = client.list('/projects', 'projects')
+    default_project = next((p for p in projects if p.get('is_default')), None)
+    selected_id = (previous or {}).get('projectId') or (default_project or {}).get('id')
+    if not projects:
+        raise ValueError('DigitalOcean returned no projects')
+    print('DigitalOcean projects: ' + ', '.join(p['name'] + ' (' + p['id'] + ')' for p in projects))
+    selection = ask('DigitalOcean project name or ID', selected_id or projects[0]['id'])
+    matches = [p for p in projects if selection in (p['name'], p['id'])]
+    if len(matches) != 1 or (previous and previous.get('projectId') and matches[0]['id'] != previous['projectId']):
+        raise ValueError('Choose one unambiguous project matching the existing stack')
+    return {'projectId': matches[0]['id'], 'projectName': matches[0]['name']}
 
 
 def run(args):
@@ -161,11 +206,20 @@ def run(args):
         defaults.update({
             'DOKS_CLUSTER_NAME': previous['cluster']['properties']['name'],
             'REPOSILITE_HOSTNAME': previous['hostname'],
-            'DO_CERTIFICATE_NAME': previous['certificate']['name'],
+            'DO_CERTIFICATE_NAME': (previous.get('certificate') or {}).get('name', ''),
         })
         # The selected stack is authoritative even if GitHub points to another cluster.
         defaults.pop('DOKS_CLUSTER_ID', None)
-    plan = collect(client, defaults)
+    if previous and previous.get('tlsMode', 'digitalocean') != 'cloudflare':
+        print('Switch this legacy stack to Cloudflare TLS. Existing DO domain and real certificate are retained; cluster settings remain unchanged.')
+        if ask('Confirm Cloudflare TLS migration? yes/no', 'no').lower() != 'yes':
+            print('Cancelled. No cloud resources or GitHub settings were changed.')
+            return
+    print('Use a scoped Cloudflare API token: Zone DNS Edit and Zone Read for the selected zone only.')
+    cf_token = token('Cloudflare')
+    pulumi_client.env['CLOUDFLARE_API_TOKEN'] = cf_token
+    plan = collect(client, defaults, Cloudflare(cf_token), previous)
+    plan.update(choose_project(client, previous))
     if not review(repo, plan):
         print('Cancelled. No cloud resources or GitHub settings were changed.')
         return

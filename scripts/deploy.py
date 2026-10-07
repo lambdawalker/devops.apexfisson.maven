@@ -13,8 +13,13 @@ CONTEXT = "reposilite-deploy"
 
 
 def configuration(environ):
-    values = {key: environ.get(key, "").strip() for key in (
-        "DOKS_CLUSTER_ID", "REPOSILITE_HOSTNAME", "DO_CERTIFICATE_NAME")}
+    mode = environ.get("TLS_MODE", "").strip() or "digitalocean"
+    if mode not in ("digitalocean", "cloudflare"):
+        raise ValueError("TLS_MODE must be digitalocean or cloudflare")
+    keys = ["DOKS_CLUSTER_ID", "REPOSILITE_HOSTNAME"]
+    if mode == "digitalocean":
+        keys.append("DO_CERTIFICATE_NAME")
+    values = {key: environ.get(key, "").strip() for key in keys}
     for key, value in values.items():
         if not value or any(ord(char) < 32 or ord(char) == 127 for char in value):
             raise ValueError(f"Set a nonempty, single-line {key} in the production environment")
@@ -28,6 +33,7 @@ def configuration(environ):
         for label in hostname.split(".")
     ):
         raise ValueError("REPOSILITE_HOSTNAME must be a DNS hostname without a scheme, port or path")
+    values["TLS_MODE"] = mode
     return values
 
 
@@ -41,10 +47,19 @@ def write_overlay(config, directory):
             "patch": json.dumps([{
                 "op": "replace",
                 "path": "/metadata/annotations/service.beta.kubernetes.io~1do-loadbalancer-certificate-name",
-                "value": config["DO_CERTIFICATE_NAME"],
+                "value": config.get("DO_CERTIFICATE_NAME", ""),
             }]),
         }],
     }
+    if config.get("TLS_MODE") == "cloudflare":
+        overlay["resources"] = [os.path.relpath(ROOT / "k8s/overlays/cloudflare", directory)]
+        overlay["patches"] = [{
+            "target": {"kind": "Ingress", "name": "reposilite"},
+            "patch": json.dumps([
+                {"op": "replace", "path": "/spec/rules/0/host", "value": config["REPOSILITE_HOSTNAME"]},
+                {"op": "replace", "path": "/spec/tls/0/hosts", "value": [config["REPOSILITE_HOSTNAME"]]},
+            ]),
+        }]
     # JSON is valid YAML; Kustomize requires one of its recognized YAML filenames.
     (directory / "kustomization.yaml").write_text(json.dumps(overlay, indent=2) + "\n")
     return directory
@@ -58,7 +73,7 @@ def kubectl(*args, capture=False):
     ).stdout
 
 
-def apply(manifest):
+def apply(manifest, tls_mode="digitalocean"):
     # Fail closed: missing resources, RBAC/network errors and maintenance block writes.
     dep = json.loads(kubectl("get", "deployment", "reposilite", "-o", "json", capture=True))
     if dep["spec"].get("replicas") != 1:
@@ -72,8 +87,12 @@ def apply(manifest):
     kubectl("apply", "--dry-run=server", "-f", str(manifest))
     kubectl("apply", "-f", str(manifest))
     kubectl("rollout", "status", "deployment/reposilite", "--timeout=10m")
-    kubectl("wait", "--for=jsonpath={.status.loadBalancer.ingress}",
-            "service/reposilite", "--timeout=5m")
+    if tls_mode == "cloudflare":
+        # Ingress-shim creates the Certificate asynchronously after the apply.
+        kubectl("wait", "--for=create", "certificate/reposilite-tls", "--timeout=2m")
+        kubectl("wait", "--for=condition=Ready", "certificate/reposilite-tls", "--timeout=10m")
+    endpoint = "ingress/reposilite" if tls_mode == "cloudflare" else "service/reposilite"
+    kubectl("wait", "--for=jsonpath={.status.loadBalancer.ingress}", endpoint, "--timeout=5m")
 
 
 def main():
@@ -85,15 +104,17 @@ def main():
     if args.operation == "render":
         write_overlay(config, directory)
     else:
-        apply(directory / "rendered.yaml")
-        kubectl("get", "service", "reposilite", "-o", "wide")
+        apply(directory / "rendered.yaml", config["TLS_MODE"])
+        kubectl("get", "ingress" if config["TLS_MODE"] == "cloudflare" else "service",
+                "reposilite", "-o", "wide")
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:
             with open(summary, "a") as stream:
                 stream.write(f"## Reposilite deployment\n\n"
                              f"Pod rollout completed and a load balancer address is assigned.\n\n"
-                             f"Endpoint: https://{config['REPOSILITE_HOSTNAME']}\n\n"
-                             "Use the Service address in the job log for your DNS A record. "
+                             f"Endpoint: https://{config['REPOSILITE_HOSTNAME']}\n\n" +
+                             ("Cloudflare DNS is managed by Pulumi. " if config["TLS_MODE"] == "cloudflare"
+                              else "Use the Service address in the job log for your DNS A record. ") +
                              "Verify DNS, the TLS certificate and dashboard externally; "
                              "this workflow checks Kubernetes readiness, not public reachability.\n")
 

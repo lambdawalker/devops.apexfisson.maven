@@ -19,13 +19,14 @@ jobs:
     needs: validate
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     environment:
       name: production
       url: https://${{ vars.REPOSILITE_HOSTNAME }}
     env:
       DOKS_CLUSTER_ID: ${{ vars.DOKS_CLUSTER_ID }}
       REPOSILITE_HOSTNAME: ${{ vars.REPOSILITE_HOSTNAME }}
+      TLS_MODE: ${{ vars.TLS_MODE }}
       DO_CERTIFICATE_NAME: ${{ vars.DO_CERTIFICATE_NAME }}
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +75,7 @@ jobs:
       - name: Obtain short-lived cluster credentials
         run: >-
           doctl kubernetes cluster kubeconfig save "$DOKS_CLUSTER_ID"
-          --expiry-seconds 1800 --alias reposilite-deploy
+          --expiry-seconds 3600 --alias reposilite-deploy
       - name: Render and deploy
         shell: bash
         run: |

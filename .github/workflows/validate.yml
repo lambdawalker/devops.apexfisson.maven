@@ -63,8 +63,9 @@ jobs:
           python -m unittest discover -s tests -v
           kubectl kustomize k8s/base > "$RUNNER_TEMP/private.yaml"
           kubectl kustomize k8s/overlays/production > "$RUNNER_TEMP/public.yaml"
+          kubectl kustomize k8s/overlays/cloudflare > "$RUNNER_TEMP/cloudflare.yaml"
       - name: Validate Kubernetes schemas
         run: >-
           kubeconform -strict -summary -kubernetes-version 1.35.0
-          "$RUNNER_TEMP/private.yaml" "$RUNNER_TEMP/public.yaml"
+          "$RUNNER_TEMP/private.yaml" "$RUNNER_TEMP/public.yaml" "$RUNNER_TEMP/cloudflare.yaml"
           k8s/maintenance/pod.yaml
