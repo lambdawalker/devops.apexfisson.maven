@@ -1,5 +1,6 @@
 """Shared UI, retained logs and scoped I/O for independently invoked setup stages."""
 import argparse
+import base64
 from contextlib import contextmanager
 import ipaddress
 import json
@@ -130,6 +131,27 @@ class Api:
                      else 'https://api.cloudflare.com/client/v4')
         self.opener = build_opener(NoRedirect())
 
+    def error_detail(self, error):
+        """Read only a bounded provider message, never dump the response body."""
+        if self.provider != 'digitalocean':
+            return ''
+        try:
+            data = json.loads(error.read(8192))
+        except (OSError, ValueError):
+            return ''
+        message = data.get('message') if isinstance(data, dict) else None
+        if not isinstance(message, str):
+            return ''
+        # Sanitize before truncating or raising: the exception can also be shown
+        # outside the transcript context. The transcript redacts other secrets.
+        if self.token:
+            for secret in (self.token, json.dumps(self.token)[1:-1],
+                           base64.b64encode(self.token.encode()).decode()):
+                message = message.replace(secret, '[REDACTED]')
+        message = re.sub(r'(?i)(Bearer\s+)\S+', r'\1[REDACTED]', message)
+        message = ''.join(c if c.isprintable() else ' ' for c in message)
+        return ' '.join(message.split())[:1000]
+
     def request(self, method, path, body=None):
         ui.check_cancelled()
         if not path.startswith('/') or path.startswith('//') or '://' in path or '..' in path:
@@ -148,8 +170,15 @@ class Api:
         except HTTPError as exc:
             if exc.code == 404 and method == 'GET':
                 return None
-            raise ui.SetupError(f'{self.provider} {method} failed (HTTP {exc.code}); check access. '
-                                'For a write, inspect the provider before retrying.') from None
+            detail = self.error_detail(exc)
+            message = f'{self.provider} {method} failed (HTTP {exc.code}).'
+            if detail:
+                message += f' Provider message: {detail}'
+            if exc.code in (401, 403):
+                message += ' Check the selected account, API token and permissions.'
+            if method != 'GET':
+                message += ' Inspect the provider before retrying the write.'
+            raise ui.SetupError(message) from None
         except (URLError, OSError, ValueError):
             raise ui.SetupError(f'{self.provider} request failed; completion is unknown. Inspect the provider before retrying.') from None
 
