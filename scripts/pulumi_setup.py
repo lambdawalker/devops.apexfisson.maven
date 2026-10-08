@@ -249,25 +249,32 @@ class Pulumi:
         self.run('config', 'set', PROJECT + ':infrastructure', json.dumps(spec))
         ui.say('Pulumi desired configuration (no credentials):')
         ui.say(json.dumps(spec, indent=2))
-        # Unique ignored plan file; never reuse a stale plan after failure/cancellation.
-        with tempfile.TemporaryDirectory(prefix='preview-', dir=directory) as temp:
-            saved = str(Path(temp) / 'plan.json')
-            ui.stage('preview')
-            ui.say('Running Pulumi preview ...', flush=True)
-            summary = preview_changes(self.run('preview', '--json', '--refresh',
-                                                '--save-plan', saved, '--suppress-outputs'), self.managed_urns)
-            ui.say('Changes: ' + ', '.join(f'{op}={count}' for op, count in sorted(summary.items())))
-            approved = (ui.confirm_action('Apply reviewed plan',
-                        'Changes: ' + ', '.join(f'{op}={count}' for op, count in sorted(summary.items())) +
-                        '\nThis applies the reviewed Pulumi plan, may create billable resources, and then saves GitHub settings.', 'Apply')
-                        if ui.supports_forms() else
-                        ui.ask('Apply this Pulumi plan and save GitHub settings? yes/no', 'no').lower() == 'yes')
-            if not approved:
-                ui.cancelled('Cancelled. Pulumi configuration is saved locally; no cloud/GitHub update was applied.')
+        cluster_urn = (f'urn:pulumi:{self.stack.split("/")[-1]}::{PROJECT}::'
+                       'digitalocean:index/kubernetesCluster:KubernetesCluster::cluster')
+        if spec.get('tlsMode') == 'cloudflare' and cluster_urn not in self.managed_urns:
+            # An unknown kubeconfig prevents Helm input normalization during the
+            # first preview. Materialize only the cluster/dependencies, then
+            # preview the complete program against the real provider config.
+            kinds = [('digitalocean:index/kubernetesCluster:KubernetesCluster', 'cluster')]
+            if spec.get('domain'):
+                kinds.append(('digitalocean:index/domain:Domain', 'domain'))
+            if spec.get('certificate') and spec['certificate']['mode'] != 'external':
+                kinds.append(('digitalocean:index/certificate:Certificate', 'certificate'))
+            if spec.get('projectId'):
+                kinds.append(('digitalocean:index/projectResources:ProjectResources', 'cluster-project'))
+            targets = tuple(value for kind, name in kinds for value in (
+                '--target', f'urn:pulumi:{self.stack.split("/")[-1]}::{PROJECT}::{kind}::{name}'))
+            ui.say('First create/import the cluster with a reviewed plan. Helm and DNS get a second preview after the cluster is ready.')
+            if not self.apply_plan(directory, targets, 'cluster bootstrap plan'):
                 return None
-            ui.stage('provision')
-            ui.say('Applying reviewed plan; certificate/cluster creation can take several minutes ...', flush=True)
-            self.run('up', '--yes', '--skip-preview', '--plan', saved, '--suppress-outputs')
+            state = json.loads(self.run('stack', 'export', '--stack', self.stack))
+            resources = state.get('deployment', {}).get('resources', [])
+            self.managed_urns.update(r['urn'] for r in resources
+                                    if r.get('custom') and not r.get('external') and r.get('id') and r.get('urn'))
+            if cluster_urn not in self.managed_urns:
+                raise ui.SetupError('Cluster bootstrap did not record a cluster ID; refusing the next stage.')
+        if not self.apply_plan(directory, (), 'infrastructure plan'):
+            return None
         outputs = json.loads(self.run('stack', 'output', '--json', '--stack', self.stack))
         values = {'DOKS_CLUSTER_ID': outputs['clusterId'], 'REPOSILITE_HOSTNAME': outputs['hostname']}
         if outputs.get('tlsMode') == 'cloudflare':
@@ -275,6 +282,29 @@ class Pulumi:
         else:
             values['DO_CERTIFICATE_NAME'] = outputs['certificateName']
         return configuration(values)
+
+    def apply_plan(self, directory, targets, label):
+        # Unique ignored plan file; never reuse a stale plan after failure/cancellation.
+        with tempfile.TemporaryDirectory(prefix='preview-', dir=directory) as temp:
+            saved = str(Path(temp) / 'plan.json')
+            ui.stage('preview')
+            ui.say('Running Pulumi preview ...', flush=True)
+            summary = preview_changes(self.run('preview', *targets, '--json', '--refresh',
+                                                '--save-plan', saved, '--suppress-outputs'), self.managed_urns)
+            ui.say('Changes: ' + ', '.join(f'{op}={count}' for op, count in sorted(summary.items())))
+            approved = (ui.confirm_action('Apply ' + label,
+                        'Changes: ' + ', '.join(f'{op}={count}' for op, count in sorted(summary.items())) +
+                        '\nThis applies the reviewed ' + label + ', and may create billable resources.', 'Apply')
+                        if ui.supports_forms() else
+                        ui.ask('Apply ' + label + '? yes/no', 'no').lower() == 'yes')
+            if not approved:
+                ui.cancelled('Cancelled. Pulumi configuration is saved locally; this plan was not applied; earlier completed stages are retained.')
+                return False
+            ui.stage('provision')
+            ui.say('Applying reviewed plan; certificate/cluster creation can take several minutes ...', flush=True)
+            self.run('up', *targets, '--yes', '--skip-preview', '--plan', saved, '--suppress-outputs')
+        return True
+
 
 
 def prepare(token, ask, backend=None):

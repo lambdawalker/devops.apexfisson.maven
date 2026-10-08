@@ -158,6 +158,68 @@ class SpecTests(unittest.TestCase):
         self.assertEqual(preview[preview.index('--save-plan') + 1], up[up.index('--plan') + 1])
         self.assertNotIn('--show-secrets', str(run.call_args_list))
 
+    def cloudflare_apply(self, existing=False, answers=('yes', 'yes'), fail_bootstrap=False):
+        client = self.mod.Pulumi('pulumi', 'secret', 'https://api.pulumi.com')
+        client.stack = 'owner/apexfission-maven/production'
+        urn = 'urn:pulumi:production::apexfission-maven::digitalocean:index/kubernetesCluster:KubernetesCluster::cluster'
+        if existing:
+            client.managed_urns.add(urn)
+        spec = self.mod.build_spec(plan())
+        spec.update(tlsMode='cloudflare', domain=None, certificate=None, projectId='project')
+        def run(*args):
+            if args[0] == 'preview':
+                return json.dumps({'summaryEvent': {'resourceChanges': {'create': 2}}})
+            if args[0] == 'up' and fail_bootstrap:
+                raise RuntimeError('bootstrap failed')
+            if args[:2] == ('stack', 'export'):
+                return json.dumps({'deployment': {'resources': [
+                    {'custom': True, 'id': UUID, 'urn': urn}]}})
+            if args[:2] == ('stack', 'output'):
+                return json.dumps({'clusterId': UUID, 'hostname': 'maven.example.org', 'tlsMode': 'cloudflare'})
+            return ''
+        with patch.object(client, 'run', side_effect=run) as commands, \
+                patch.object(self.mod.ui, 'supports_forms', return_value=False), \
+                patch.object(self.mod.ui, 'ask', side_effect=answers), \
+                patch('sys.stdout', new_callable=io.StringIO), tempfile.TemporaryDirectory() as tmp:
+            if fail_bootstrap:
+                with self.assertRaisesRegex(RuntimeError, 'bootstrap failed'):
+                    client.apply(spec, Path(tmp))
+                result = None
+            else:
+                result = client.apply(spec, Path(tmp))
+        return result, [call.args for call in commands.call_args_list], client, urn
+
+    def test_fresh_cloudflare_uses_two_separately_saved_reviewed_plans(self):
+        result, calls, client, urn = self.cloudflare_apply()
+        operations = [c for c in calls if c[0] in ('preview', 'up')]
+        self.assertEqual(['preview', 'up', 'preview', 'up'], [c[0] for c in operations])
+        first, apply_first, second, apply_second = operations
+        self.assertIn('--target', first)
+        self.assertIn(urn, first)
+        self.assertNotIn('--target', second)
+        self.assertNotIn('--target-dependents', str(calls))
+        self.assertEqual(first[first.index('--save-plan') + 1], apply_first[apply_first.index('--plan') + 1])
+        self.assertEqual(second[second.index('--save-plan') + 1], apply_second[apply_second.index('--plan') + 1])
+        self.assertNotEqual(first[first.index('--save-plan') + 1], second[second.index('--save-plan') + 1])
+        self.assertIn(urn, client.managed_urns)
+        self.assertEqual(UUID, result['DOKS_CLUSTER_ID'])
+
+    def test_existing_cluster_skips_bootstrap(self):
+        result, calls, _, _ = self.cloudflare_apply(existing=True, answers=('yes',))
+        self.assertEqual(1, sum(c[0] == 'up' for c in calls))
+        self.assertNotIn('--target', str(calls))
+
+    def test_cancel_second_phase_retains_cluster_without_outputs(self):
+        result, calls, _, _ = self.cloudflare_apply(answers=('yes', 'no'))
+        self.assertIsNone(result)
+        self.assertEqual(1, sum(c[0] == 'up' for c in calls))
+        self.assertFalse(any(c[:2] == ('stack', 'output') for c in calls))
+
+    def test_failed_bootstrap_never_runs_second_preview(self):
+        _, calls, _, _ = self.cloudflare_apply(fail_bootstrap=True)
+        self.assertEqual(1, sum(c[0] == 'preview' for c in calls))
+        self.assertFalse(any(c[:2] == ('stack', 'output') for c in calls))
+
 
 class ResourceTests(unittest.TestCase):
     def setUp(self):
