@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: reposilite
+  annotations:
+    cert-manager.io/cluster-issuer: reposilite-http01
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: reposilite-edge
+  tls:
+    - hosts:
+        - maven.example.com
+      secretName: reposilite-tls
+  rules:
+    - host: maven.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: reposilite
+                port:
+                  number: 8080

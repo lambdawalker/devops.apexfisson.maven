@@ -32,3 +32,10 @@ Read README.md and docs/design.md before changing deployment behavior.
   requires an inventory and typed confirmation, journals IDs before deletion, and
   removes Pulumi state only after verifying absence. Keep normal teardown and
   setup protections unchanged; never execute live cleanup in validation.
+
+- Independent setup scripts are an explicit alternative to the combined Pulumi
+  wizard: DigitalOcean APIs/Helm/kubectl, then Cloudflare-only DNS, then DOKS
+  HTTP-01 hostname/TLS, then GitHub settings. Keep provider credentials separated.
+  Local public exposure is allowed only after private administrator bootstrap
+  and confirmation. Preserve data and check exposure before bootstrap writes.
+  Do not run the old Pulumi manager against resources switched to this flow.

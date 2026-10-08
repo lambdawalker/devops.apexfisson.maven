@@ -67,6 +67,42 @@ class DeploymentTests(unittest.TestCase):
         dep = next(d for d in docs if d["kind"] == "Deployment")
         self.assertFalse(dep["spec"]["template"]["spec"]["containers"][0].get("envFrom"))
 
+    def test_http01_render_uses_matching_issuer_and_hostname_on_both_ingresses(self):
+        conf = self.deploy.configuration({
+            "DOKS_CLUSTER_ID": self.config["DOKS_CLUSTER_ID"],
+            "REPOSILITE_HOSTNAME": "maven.apexfission.com", "TLS_MODE": "http01"})
+        self.assertNotIn("DO_CERTIFICATE_NAME", conf)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            path = self.deploy.write_overlay(conf, Path(directory))
+            result = subprocess.check_output(
+                [os.environ.get("KUBECTL", "kubectl"), "kustomize", str(path)], text=True)
+        import yaml
+        docs = list(yaml.safe_load_all(result))
+        ingresses = [d for d in docs if d["kind"] == "Ingress"]
+        self.assertEqual(2, len(ingresses))
+        for ingress in ingresses:
+            self.assertEqual("maven.apexfission.com", ingress["spec"]["rules"][0]["host"])
+            self.assertEqual("reposilite-edge", ingress["spec"]["ingressClassName"])
+        tls = next(d for d in ingresses if d["metadata"]["name"] == "reposilite")
+        self.assertEqual("reposilite-http01", tls["metadata"]["annotations"]["cert-manager.io/cluster-issuer"])
+        self.assertEqual(["maven.apexfission.com"], tls["spec"]["tls"][0]["hosts"])
+        service = next(d for d in docs if d["kind"] == "Service")
+        self.assertEqual("ClusterIP", service["spec"]["type"])
+        dep = next(d for d in docs if d["kind"] == "Deployment")
+        self.assertFalse(dep["spec"]["template"]["spec"]["containers"][0].get("envFrom"))
+        redirect = next(d for d in docs if d["kind"] == "Middleware")
+        self.assertEqual("https", redirect["spec"]["redirectScheme"]["scheme"])
+        self.assertNotIn("cloudflare", result.lower())
+
+    def test_http01_waits_for_certificate_and_ingress(self):
+        calls, run = self.fake_cluster()
+        with patch.object(self.deploy.subprocess, "run", side_effect=run):
+            self.deploy.apply(Path("rendered.yaml"), tls_mode="http01")
+        self.assertTrue(any("certificate/reposilite-tls" in c for c in calls))
+        self.assertTrue(any("ingress/reposilite" in c for c in calls))
+        self.assertTrue(any("--dry-run=server" in c for c in calls))
+        self.assertFalse(any("service/reposilite" in c and "wait" in c for c in calls))
+
     def test_invalid_tls_mode_is_rejected(self):
         with self.assertRaises(ValueError):
             self.deploy.configuration({**self.config, "TLS_MODE": "unknown"})
