@@ -30,6 +30,10 @@ jobs:
         run: |
           python scripts/setup_environment.py --help
           python scripts/save_tokens.py --help
+          python scripts/setup_digitalocean.py --help
+          python scripts/setup_cloudflare.py --help
+          python scripts/setup_digitalocean_hostname.py --help
+          python scripts/setup_github.py --help
 
   validate:
     runs-on: ubuntu-latest
@@ -65,8 +69,14 @@ jobs:
           kubectl kustomize k8s/base > "$RUNNER_TEMP/private.yaml"
           kubectl kustomize k8s/overlays/production > "$RUNNER_TEMP/public.yaml"
           kubectl kustomize k8s/overlays/cloudflare > "$RUNNER_TEMP/cloudflare.yaml"
+          kubectl kustomize k8s/overlays/http01 > "$RUNNER_TEMP/http01.yaml"
       - name: Validate Kubernetes schemas
         run: >-
           kubeconform -strict -summary -kubernetes-version 1.35.0
           "$RUNNER_TEMP/private.yaml" "$RUNNER_TEMP/public.yaml" "$RUNNER_TEMP/cloudflare.yaml"
           k8s/maintenance/pod.yaml
+      - name: Validate HTTP01 built-in Kubernetes schemas
+        # Middleware is a Traefik CRD; its shape is covered by rendering tests.
+        run: >-
+          kubeconform -strict -summary -skip Middleware -kubernetes-version 1.35.0
+          "$RUNNER_TEMP/http01.yaml"

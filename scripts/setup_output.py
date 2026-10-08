@@ -108,7 +108,7 @@ class ThreadStream:
             self.pending = ''
 
 
-def logged(callback, ui, directory=DEFAULT_DIRECTORY):
+def logged(callback, ui, directory=DEFAULT_DIRECTORY, keep_log=False):
     transcript = Transcript(directory, lambda *args, **kwargs: ui._backend.say(*args, **kwargs))
     previous, ui._transcript = ui._transcript, transcript
     stdout, stderr = ThreadStream(sys.stdout, transcript), ThreadStream(sys.stderr, transcript)
@@ -125,7 +125,7 @@ def logged(callback, ui, directory=DEFAULT_DIRECTORY):
                     ui.check_cancelled()
                     transcript.emit('Setup completed successfully.\n')
                     # Closing before unlink is required on Windows.
-                    answer = ui.ask('Delete the debugging log? yes/no', 'no')
+                    answer = 'no' if keep_log else ui.ask('Delete the debugging log? yes/no', 'no')
                     if answer.lower() == 'yes':
                         transcript.close()
                         try:

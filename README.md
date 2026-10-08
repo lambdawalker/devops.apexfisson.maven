@@ -24,6 +24,11 @@ Retain reduces accidental volume deletion; it does **not** provide backups.
 
 ## Start here
 
+**Recommended: [four independent setup scripts](docs/independent-setup.md)** —
+DigitalOcean/IP test, Cloudflare DNS, DigitalOcean HTTPS, then GitHub. Each stage
+has forms, live output and a retained log.
+
+
 1. **[Setup wizard](docs/setup-wizard.md)**: create/reuse DigitalOcean infrastructure
    and configure Cloudflare and GitHub from Windows or Linux.
 2. **[Setup](docs/setup.md)**: private deployment and administrator bootstrap.

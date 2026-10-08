@@ -14,8 +14,8 @@ CONTEXT = "reposilite-deploy"
 
 def configuration(environ):
     mode = environ.get("TLS_MODE", "").strip() or "digitalocean"
-    if mode not in ("digitalocean", "cloudflare"):
-        raise ValueError("TLS_MODE must be digitalocean or cloudflare")
+    if mode not in ("digitalocean", "cloudflare", "http01"):
+        raise ValueError("TLS_MODE must be digitalocean, cloudflare or http01")
     keys = ["DOKS_CLUSTER_ID", "REPOSILITE_HOSTNAME"]
     if mode == "digitalocean":
         keys.append("DO_CERTIFICATE_NAME")
@@ -51,8 +51,8 @@ def write_overlay(config, directory):
             }]),
         }],
     }
-    if config.get("TLS_MODE") == "cloudflare":
-        overlay["resources"] = [os.path.relpath(ROOT / "k8s/overlays/cloudflare", directory)]
+    if config.get("TLS_MODE") in ("cloudflare", "http01"):
+        overlay["resources"] = [os.path.relpath(ROOT / "k8s/overlays" / config["TLS_MODE"], directory)]
         overlay["patches"] = [{
             "target": {"kind": "Ingress", "name": "reposilite"},
             "patch": json.dumps([
@@ -60,6 +60,13 @@ def write_overlay(config, directory):
                 {"op": "replace", "path": "/spec/tls/0/hosts", "value": [config["REPOSILITE_HOSTNAME"]]},
             ]),
         }]
+    if config.get("TLS_MODE") == "http01":
+        overlay["patches"].append({
+            "target": {"kind": "Ingress", "name": "reposilite-http"},
+            "patch": json.dumps([
+                {"op": "replace", "path": "/spec/rules/0/host", "value": config["REPOSILITE_HOSTNAME"]},
+            ]),
+        })
     # JSON is valid YAML; Kustomize requires one of its recognized YAML filenames.
     (directory / "kustomization.yaml").write_text(json.dumps(overlay, indent=2) + "\n")
     return directory
@@ -87,11 +94,11 @@ def apply(manifest, tls_mode="digitalocean"):
     kubectl("apply", "--dry-run=server", "-f", str(manifest))
     kubectl("apply", "-f", str(manifest))
     kubectl("rollout", "status", "deployment/reposilite", "--timeout=10m")
-    if tls_mode == "cloudflare":
+    if tls_mode in ("cloudflare", "http01"):
         # Ingress-shim creates the Certificate asynchronously after the apply.
         kubectl("wait", "--for=create", "certificate/reposilite-tls", "--timeout=2m")
         kubectl("wait", "--for=condition=Ready", "certificate/reposilite-tls", "--timeout=10m")
-    endpoint = "ingress/reposilite" if tls_mode == "cloudflare" else "service/reposilite"
+    endpoint = "ingress/reposilite" if tls_mode in ("cloudflare", "http01") else "service/reposilite"
     kubectl("wait", "--for=jsonpath={.status.loadBalancer.ingress}", endpoint, "--timeout=5m")
 
 
@@ -105,7 +112,7 @@ def main():
         write_overlay(config, directory)
     else:
         apply(directory / "rendered.yaml", config["TLS_MODE"])
-        kubectl("get", "ingress" if config["TLS_MODE"] == "cloudflare" else "service",
+        kubectl("get", "ingress" if config["TLS_MODE"] in ("cloudflare", "http01") else "service",
                 "reposilite", "-o", "wide")
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:
@@ -114,6 +121,7 @@ def main():
                              f"Pod rollout completed and a load balancer address is assigned.\n\n"
                              f"Endpoint: https://{config['REPOSILITE_HOSTNAME']}\n\n" +
                              ("Cloudflare DNS is managed by Pulumi. " if config["TLS_MODE"] == "cloudflare"
+                              else "Verify the hostname points to the gateway IP. " if config["TLS_MODE"] == "http01"
                               else "Use the Service address in the job log for your DNS A record. ") +
                              "Verify DNS, the TLS certificate and dashboard externally; "
                              "this workflow checks Kubernetes readiness, not public reachability.\n")
